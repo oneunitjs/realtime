@@ -51,6 +51,7 @@ import { anonymousAuthProvider, credentialFromHandshake } from "./auth/auth-prov
 import type { HandshakeContext } from "./connection/connection.types.js";
 import { decodeFrame, encodeFrame, type CodecName } from "../protocol/index.js";
 import { encodeRoomKey } from "../room-namespace/room-key.js";
+import { encodeDocumentKey } from "./documents/document-adapter.js";
 import { ValidationFailedError } from "../error/index.js";
 import type { EncryptedEnvelope } from "../e2ee/types.js";
 import type { EnvelopeService } from "../e2ee/envelope.js";
@@ -499,8 +500,24 @@ export class Hub {
             delivered += result.delivered;
             failed += result.failed;
           } else if (event.documentId) {
-            const result = await this.router.publishToDocument(
+            // Enforce document write permission: a client may only publish
+            // mutations to documents it subscribed to with write access.
+            const docKey = encodeDocumentKey(principal.tenantId, event.documentId);
+            const subscription = this.documentStore.getSubscription(
               event.documentId,
+              connectionId,
+            );
+            if (
+              !subscription ||
+              subscription.permission !== "write"
+            ) {
+              this.metrics.increment("hub.publish.rejected");
+              throw new ForbiddenError(
+                `No write subscription for document ${event.documentId}`,
+              );
+            }
+            const result = await this.router.publishToDocument(
+              docKey,
               data,
               connectionId,
               event.excludeSender ?? false
@@ -513,7 +530,8 @@ export class Hub {
               if (
                 recipient &&
                 recipient.state === "authenticated" &&
-                recipient.transport
+                recipient.transport &&
+                recipient.principal?.tenantId === principal.tenantId
               ) {
                 const ok = await this.fanout.enqueue(
                   {

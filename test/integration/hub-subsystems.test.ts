@@ -640,7 +640,7 @@ describe("integration — Hub + Collaboration document sync", () => {
     expect(bobEngine.getState().text).toBe("h");
   });
 
-  it("rejects publishing to a document without subscribers", async () => {
+  it("rejects publishing to a document without write subscription", async () => {
     // Charlie is not subscribed to doc-1.
     const charlieTransport = await connectClient(hub, "c-charlie", "charlie", "tenant-a", "cred-charlie");
 
@@ -650,11 +650,8 @@ describe("integration — Hub + Collaboration document sync", () => {
       payload: { op: {} },
     } as never);
 
-    // Alice and Bob are subscribed (from beforeEach), so both receive Charlie's op.
-    expect(result.status).toBe("delivered");
-    if (result.status === "delivered") {
-      expect(result.recipientCount).toBe(2);
-    }
+    // Charlie has no write subscription, so the publish is rejected.
+    expect(result.status).toBe("rejected");
 
     hub.disconnect("c-charlie", "test cleanup");
   });

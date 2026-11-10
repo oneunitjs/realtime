@@ -1,6 +1,6 @@
 {
   "name": "@oneunit/realtime",
-  "version": "2.0.0",
+  "version": "1.0.0-beta",
   "description": "Local realtime WebSocket infrastructure for Node.js: in-memory channels and fan-out, adaptive backpressure, shared heartbeat timer, connection and document rooms, auth/authorization hooks, transport adapter (uWebSockets.js), Libsodium end-to-end encryption, and CRDT collaboration. Single-process, zero-broker, transport-neutral core.",
   "type": "module",
   "main": "./dist/index.js",

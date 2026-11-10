@@ -1,7 +1,7 @@
 # Technical Architecture Specification — `@oneunit/realtime`
 
 **Package:** `@oneunit/realtime`  
-**Version:** `2.0.0`  
+**Version:** `1.0.0-beta`  
 **Target Environment:** Node.js `>= 20.0.0` (ESM)  
 **Status:** Canonical Technical Architecture Specification
 

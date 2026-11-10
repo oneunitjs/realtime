@@ -313,7 +313,7 @@ class RealtimeServerImpl implements RealtimeServer {
   private async doClose(timeoutMs: number): Promise<RealtimeShutdownResult> {
     const started = Date.now();
     const connectionCount = this.adapter?.connectionCount ?? 0;
-    this.hub.close();
+    await this.hub.close();
 
     try {
       await Promise.race([

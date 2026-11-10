@@ -50,6 +50,7 @@ import type { AuthProvider } from "./auth/auth-provider.js";
 import { anonymousAuthProvider, credentialFromHandshake } from "./auth/auth-provider.js";
 import type { HandshakeContext } from "./connection/connection.types.js";
 import { decodeFrame, encodeFrame, type CodecName } from "../protocol/index.js";
+import { encodeRoomKey } from "../room-namespace/room-key.js";
 import { ValidationFailedError } from "../error/index.js";
 import type { EncryptedEnvelope } from "../e2ee/types.js";
 import type { EnvelopeService } from "../e2ee/envelope.js";
@@ -331,8 +332,19 @@ export class Hub {
           return;
         }
 
-        // Recheck connection state after the async boundary.
-        this.requireAuthenticated(connectionId);
+        // Recheck connection state after the async boundary. If the
+        // connection disconnected while the join was awaiting, rollback
+        // the membership to avoid stale state.
+        try {
+          this.requireAuthenticated(connectionId);
+        } catch (error) {
+          try {
+            await this.membership.leave(connectionId, roomId);
+          } catch {
+            // Best-effort rollback; disconnect cleanup will also remove it.
+          }
+          throw error;
+        }
 
         this.presence.addRoom(connectionId, roomId);
         this.metrics.increment("hub.room.join");
@@ -468,8 +480,18 @@ export class Hub {
           }
 
           if (event.roomId) {
+            // Enforce room membership: a client may only publish to rooms it joined.
+            const namespaceId = DEFAULT_NAMESPACE;
+            const roomKey = encodeRoomKey(principal.tenantId, namespaceId, event.roomId);
+            const roomMembers = this.membership.membersByRoomKey(roomKey);
+            if (!roomMembers.includes(connectionId)) {
+              this.metrics.increment("hub.publish.rejected");
+              throw new ForbiddenError(
+                `Not a member of room ${event.roomId}`,
+              );
+            }
             const result = await this.router.publishToRoom(
-              event.roomId,
+              roomKey,
               data,
               connectionId,
               event.excludeSender ?? true
@@ -573,7 +595,9 @@ export class Hub {
     }
 
     const encoded = this.envelopeService.encodeEnvelope(envelope);
-    const memberIds = await this.membership.members(envelope.conversationId);
+    const namespaceId = DEFAULT_NAMESPACE;
+    const roomKey = encodeRoomKey(principal.tenantId, namespaceId, envelope.conversationId);
+    const memberIds = this.membership.membersByRoomKey(roomKey);
 
     let delivered = 0;
     let failed = 0;
@@ -643,15 +667,16 @@ export class Hub {
       connecting: this.countByState("connecting"),
       closing: this.countByState("closing"),
       closed: this.countByState("closed"),
-      rooms: 0,
-      documents: this.documentStore.total(),
+      rooms: this.membership.roomCount(),
+      documents: this.documentStore.documentCount(),
       memberships: this.membership.total(),
       subscriptions: this.documentStore.total(),
     };
   }
 
-  /** Graceful shutdown: close every connection and stop the heartbeat. */
-  close(): void {
+  /** Graceful shutdown: close every connection and stop the heartbeat. Awaits
+   *  all connection disconnects before resolving. Idempotent. */
+  async close(): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -659,9 +684,12 @@ export class Hub {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
     }
-    for (const connection of this.registry.all()) {
-      void this.disconnect(connection.id, "server shutdown");
-    }
+    const connections = this.registry.all();
+    await Promise.all(
+      connections.map((connection) =>
+        this.disconnect(connection.id, "server shutdown"),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------- private
@@ -832,7 +860,7 @@ export class Hub {
       return true;
     }
     const result = await this.authorize(action, principal, resourceId, tenantId);
-    return result === true || result === undefined;
+    return result === true;
   }
 
   private async roomTenant(roomId: string): Promise<string | undefined> {
@@ -849,8 +877,8 @@ export class Hub {
     return this.roomCapacities.get(roomId);
   }
 
-  private resolveRoomMembers(roomId: string): TransportConnection[] {
-    const memberIds = this.membership.members(roomId);
+  private resolveRoomMembers(roomKey: string): TransportConnection[] {
+    const memberIds = this.membership.membersByRoomKey(roomKey);
     const recipients: TransportConnection[] = [];
     for (const memberId of memberIds) {
       const entry = this.registry.get(memberId);
@@ -1065,6 +1093,8 @@ export class Hub {
     }
   }
 }
+
+const DEFAULT_NAMESPACE = "default";
 
 function detectCodec(data: Uint8Array): CodecName {
   if (data.length === 0) {

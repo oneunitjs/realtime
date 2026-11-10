@@ -171,7 +171,11 @@ export interface EnvelopeServiceOptions {
   allowedEpochs?: Set<number>;
   revokedDevices?: Set<string>;
   replayGuard?: {
-    accept: (senderDeviceId: string, messageId: string) => boolean;
+    /** Non-mutating preliminary check: returns true if the message ID is
+     *  not yet seen (or should be allowed through). Does not commit state. */
+    check: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
+    /** Atomic commit after successful authentication. Must not throw. */
+    commit: (senderDeviceId: string, messageId: string) => void | Promise<void>;
   };
 }
 
@@ -186,7 +190,10 @@ export class EnvelopeService {
   private readonly allowedEpochs: Set<number> | null;
   private readonly revokedDevices: Set<string>;
   private readonly replayGuard:
-    | { accept: (senderDeviceId: string, messageId: string) => boolean }
+    | {
+        check: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
+        commit: (senderDeviceId: string, messageId: string) => void | Promise<void>;
+      }
     | null;
 
   constructor(options: EnvelopeServiceOptions = {}) {
@@ -297,9 +304,10 @@ export class EnvelopeService {
       throw new UnknownEpochError();
     }
 
-    // Replay check: reject duplicates / stale before decryption.
+    // Replay check (non-mutating preliminary): reject duplicates/stale
+    // before doing expensive crypto, but do not commit state yet.
     if (this.replayGuard) {
-      const ok = this.replayGuard.accept(
+      const ok = await this.replayGuard.check(
         envelope.senderDeviceId,
         envelope.messageId,
       );
@@ -348,7 +356,7 @@ export class EnvelopeService {
       protocolVersion: envelope.protocolVersion,
       conversationId: envelope.conversationId,
       senderDeviceId: envelope.senderDeviceId,
-      recipientDeviceId: undefined,
+      recipientDeviceId: envelope.recipientDeviceIds?.[0] ?? null,
       keyEpoch: envelope.keyEpoch,
     });
     const aeadKey = Buffer.from(
@@ -367,6 +375,14 @@ export class EnvelopeService {
         throw error;
       }
       throw new AeadFailureError((error as Error)?.message);
+    }
+
+    // Commit replay state only after successful authentication and decryption.
+    if (this.replayGuard) {
+      await this.replayGuard.commit(
+        envelope.senderDeviceId,
+        envelope.messageId,
+      );
     }
 
     return plaintext;

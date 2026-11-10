@@ -8,6 +8,10 @@
  *
  * Local Maps track per-connection room membership for fast sync access by the
  * Hub; the consolidated service owns the durable store.
+ *
+ * All room indexes are keyed by tenant-qualified room keys
+ * (`encodeRoomKey(tenantId, namespaceId, roomId)`) so that two tenants can
+ * independently use the same room name without collision.
  */
 import { MembershipManager } from "../../room-namespace/membership-manager.js";
 import { encodeRoomKey, decodeRoomKey } from "../../room-namespace/room-key.js";
@@ -15,11 +19,13 @@ import type { RoomNamespaceStore, Membership, RoomRecord, NamespaceRecord } from
 import type { Principal } from "../connection/connection.types.js";
 import { TenantIsolationError, RoomCapacityError } from "../../error/index.js";
 
+const DEFAULT_NAMESPACE = "default";
+
 // ---------------------------------------------------------------------------
 // In-memory RoomNamespaceStore implementation
 // ---------------------------------------------------------------------------
 
-class InMemoryRoomNamespaceStore implements RoomNamespaceStore {
+class InMemoryRoomNamespaceStore {
   private namespaces = new Map<string, NamespaceRecord>();
   private rooms = new Map<string, RoomRecord>();
   private memberships = new Map<string, Map<string, Membership>>();
@@ -72,6 +78,10 @@ class InMemoryRoomNamespaceStore implements RoomNamespaceStore {
       }
     }
     return result;
+  }
+
+  roomCount(): number {
+    return this.rooms.size;
   }
 
   async getMembership(roomKey: string, connectionId: string): Promise<Membership | null> {
@@ -174,8 +184,6 @@ class InMemoryRoomNamespaceStore implements RoomNamespaceStore {
 // Room Membership Adapter
 // ---------------------------------------------------------------------------
 
-const DEFAULT_NAMESPACE = "default";
-
 export interface RoomMembership {
   connectionId: string;
   roomId: string;
@@ -187,7 +195,8 @@ export class RoomAdapter {
   private readonly store: InMemoryRoomNamespaceStore;
   private readonly manager: MembershipManager;
   private readonly roomCapacities: Map<string, number>;
-  // Local sync index: roomId -> Set<connectionId> for fast member lookup
+  // Local sync index: roomKey -> Set<connectionId> for fast member lookup.
+  // Keyed by tenant-qualified room key to prevent cross-tenant collision.
   private readonly roomMembers = new Map<string, Set<string>>();
 
   constructor(roomCapacities: Record<string, number> = {}) {
@@ -196,10 +205,15 @@ export class RoomAdapter {
     this.roomCapacities = new Map(Object.entries(roomCapacities));
   }
 
+  /** Build the tenant-qualified room key for the default namespace. */
+  private roomKey(tenantId: string, roomId: string): string {
+    return encodeRoomKey(tenantId, DEFAULT_NAMESPACE, roomId);
+  }
+
   /** Ensure the default namespace and room exist in the store. */
   private async ensureRoom(tenantId: string, roomId: string): Promise<void> {
     const namespaceId = DEFAULT_NAMESPACE;
-    const roomKey = encodeRoomKey(tenantId, namespaceId, roomId);
+    const roomKey = this.roomKey(tenantId, roomId);
 
     let ns = await this.store.getNamespace(tenantId, namespaceId);
     if (!ns) {
@@ -225,8 +239,10 @@ export class RoomAdapter {
     tenantId: string,
     roomId: string,
   ): Promise<{ added: boolean; membership: RoomMembership }> {
-    // Idempotent: already a member in this room
-    const existingConnSet = this.roomMembers.get(roomId);
+    const roomKey = this.roomKey(tenantId, roomId);
+
+    // Idempotent: already a member in this room (tenant-qualified)
+    const existingConnSet = this.roomMembers.get(roomKey);
     if (existingConnSet?.has(connectionId)) {
       return {
         added: false,
@@ -239,39 +255,47 @@ export class RoomAdapter {
       };
     }
 
-    // Tenant isolation: if room already has members, they must all be same tenant
-    const existingMembers = this.roomMembers.get(roomId);
-    if (existingMembers && existingMembers.size > 0) {
-      // Check the first member's tenant
-      const firstMemberId = existingMembers.values().next().value;
-      if (!firstMemberId) {
-        return {
-          added: false,
-          membership: {
-            connectionId,
-            roomId,
-            tenantId,
-            joinedAt: Date.now(),
-          },
-        };
+    // Tenant isolation: if any tenant already has members in a room with
+    // the same bare roomId, a different tenant cannot join.
+    for (const [existingRoomKey, existingConnSet] of this.roomMembers) {
+      if (existingConnSet.size === 0) {
+        continue;
       }
-      const firstMemberTenant = this.getConnectionTenant(firstMemberId, roomId);
-      if (firstMemberTenant && firstMemberTenant !== tenantId) {
+      const decoded = decodeRoomKey(existingRoomKey);
+      if (!decoded) {
+        continue;
+      }
+      if (decoded.roomId === roomId && decoded.tenantId !== tenantId) {
         throw new TenantIsolationError(
-          `Room ${roomId} is isolated to tenant ${firstMemberTenant}`,
+          `Room ${roomId} is isolated to tenant ${decoded.tenantId}`,
+        );
+      }
+    }
+
+    // Tenant isolation: check the store too (for members added before this adapter's local index)
+    const allMemberships = this.store.getAllMemberships();
+    for (const [storeRoomKey, connMap] of allMemberships) {
+      if (connMap.size === 0) {
+        continue;
+      }
+      const decoded = decodeRoomKey(storeRoomKey);
+      if (!decoded) {
+        continue;
+      }
+      if (decoded.roomId === roomId && decoded.tenantId !== tenantId) {
+        throw new TenantIsolationError(
+          `Room ${roomId} is isolated to tenant ${decoded.tenantId}`,
         );
       }
     }
 
     await this.ensureRoom(tenantId, roomId);
-    const namespaceId = DEFAULT_NAMESPACE;
-    const roomKey = encodeRoomKey(tenantId, namespaceId, roomId);
 
     const result = await this.manager.join(
       { userId: principal.userId, tenantId: principal.tenantId },
       connectionId,
       tenantId,
-      namespaceId,
+      DEFAULT_NAMESPACE,
       roomId,
       {
         authorizeJoin: () => true, // Core Hub already authorized via middleware
@@ -304,11 +328,11 @@ export class RoomAdapter {
       throw new Error(result.error.message);
     }
 
-    // Track in local sync index for fast member lookup
-    let roomConnSet = this.roomMembers.get(roomId);
+    // Track in local sync index using tenant-qualified room key
+    let roomConnSet = this.roomMembers.get(roomKey);
     if (!roomConnSet) {
       roomConnSet = new Set();
-      this.roomMembers.set(roomId, roomConnSet);
+      this.roomMembers.set(roomKey, roomConnSet);
     }
     roomConnSet.add(connectionId);
 
@@ -325,12 +349,11 @@ export class RoomAdapter {
 
   /** Leave a room. Returns true if the connection was a member. */
   async leave(connectionId: string, roomId: string): Promise<boolean> {
-    const tenantId = this.getConnectionTenant(connectionId, roomId);
+    const tenantId = this.getConnectionTenantByRoomId(connectionId, roomId);
     if (!tenantId) {
       return false;
     }
-    const namespaceId = DEFAULT_NAMESPACE;
-    const roomKey = encodeRoomKey(tenantId, namespaceId, roomId);
+    const roomKey = this.roomKey(tenantId, roomId);
 
     const existing = await this.store.getMembership(roomKey, connectionId);
     if (!existing) {
@@ -343,20 +366,29 @@ export class RoomAdapter {
     });
 
     // Update local sync index
-    const connSet = this.roomMembers.get(roomId);
+    const connSet = this.roomMembers.get(roomKey);
     if (connSet) {
       connSet.delete(connectionId);
       if (connSet.size === 0) {
-        this.roomMembers.delete(roomId);
+        this.roomMembers.delete(roomKey);
       }
     }
 
     return true;
   }
 
-  /** Get all connection IDs in a room. */
+  /** Get all connection IDs in a room by bare roomId (derives tenant from store). */
   members(roomId: string): string[] {
-    const connSet = this.roomMembers.get(roomId);
+    const tenantId = this.getAnyTenantForRoomId(roomId);
+    if (!tenantId) {
+      return [];
+    }
+    return this.membersByRoomKey(this.roomKey(tenantId, roomId));
+  }
+
+  /** Get all connection IDs in a tenant-qualified room (roomKey). */
+  membersByRoomKey(roomKey: string): string[] {
+    const connSet = this.roomMembers.get(roomKey);
     return connSet ? [...connSet] : [];
   }
 
@@ -382,11 +414,15 @@ export class RoomAdapter {
     await this.store.removeAllMembershipsForConnection(connectionId);
     // Clear local sync index
     for (const roomId of rooms) {
-      const connSet = this.roomMembers.get(roomId);
-      if (connSet) {
-        connSet.delete(connectionId);
-        if (connSet.size === 0) {
-          this.roomMembers.delete(roomId);
+      const tenantId = this.getConnectionTenantByRoomId(connectionId, roomId);
+      if (tenantId) {
+        const roomKey = this.roomKey(tenantId, roomId);
+        const connSet = this.roomMembers.get(roomKey);
+        if (connSet) {
+          connSet.delete(connectionId);
+          if (connSet.size === 0) {
+            this.roomMembers.delete(roomKey);
+          }
         }
       }
     }
@@ -402,13 +438,28 @@ export class RoomAdapter {
     return count;
   }
 
-  /** Count members in a room. */
+  /** Total number of rooms across all tenants. */
+  roomCount(): number {
+    return this.store.roomCount();
+  }
+
+  /** Count members in a room by bare roomId (derives tenant from store). */
   count(roomId: string): number {
-    const connSet = this.roomMembers.get(roomId);
+    const tenantId = this.getAnyTenantForRoomId(roomId);
+    if (!tenantId) {
+      return 0;
+    }
+    return this.countByRoomKey(this.roomKey(tenantId, roomId));
+  }
+
+  /** Count members in a tenant-qualified room (roomKey). */
+  countByRoomKey(roomKey: string): number {
+    const connSet = this.roomMembers.get(roomKey);
     return connSet?.size ?? 0;
   }
 
-  private getConnectionTenant(connectionId: string, roomId: string): string | undefined {
+  /** Get the tenant for a connection in a specific room (by bare roomId). */
+  private getConnectionTenantByRoomId(connectionId: string, roomId: string): string | undefined {
     for (const [roomKey, connMap] of this.store.getAllMemberships()) {
       const decoded = decodeRoomKey(roomKey);
       if (decoded && decoded.roomId === roomId) {
@@ -419,5 +470,30 @@ export class RoomAdapter {
       }
     }
     return undefined;
+  }
+
+  /** Get any tenant that has a room with the given bare roomId. */
+  private getAnyTenantForRoomId(roomId: string): string | undefined {
+    for (const [roomKey] of this.store.getAllMemberships()) {
+      const decoded = decodeRoomKey(roomKey);
+      if (decoded && decoded.roomId === roomId) {
+        return decoded.tenantId;
+      }
+    }
+    return undefined;
+  }
+
+  /** Get the tenant for a connection in a specific room key. */
+  private getConnectionTenant(connectionId: string, roomKey: string): string | undefined {
+    const connMap = this.store.getAllMemberships().get(roomKey);
+    if (!connMap) {
+      return undefined;
+    }
+    const membership = connMap.get(connectionId);
+    if (!membership) {
+      return undefined;
+    }
+    const decoded = decodeRoomKey(roomKey);
+    return decoded?.tenantId;
   }
 }

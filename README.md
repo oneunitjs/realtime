@@ -4,7 +4,7 @@
   <strong>Production-grade, single-process realtime WebSocket infrastructure for Node.js.</strong>
   <br/>
   In-memory channels · uWebSockets.js transport · Adaptive backpressure · Shared heartbeat timer<br/>
-  Zero-trust auth hooks · Browser-safe client SDK · Libsodium E2EE · In-process CRDT collaboration
+  Verified auth hooks · Browser-safe client SDK · Libsodium E2EE · In-process CRDT collaboration
 </p>
 
 <p align="center">
@@ -58,14 +58,14 @@
 `@oneunit/realtime` is a **high-throughput, transport-neutral, single-process realtime runtime for Node.js (20+)**. Built from the ground up for mission-critical applications, it provides everything needed to power modern interactive applications in a single Node process:
 
 - **Transport-Independent Core Engine**: The core hub operates entirely on an abstract `TransportConnection` contract. It has zero coupling to WebSockets, HTTP frameworks, or concrete transport sockets, making your core business logic purely testable in memory.
-- **Kernel-Grade uWebSockets.js Engine**: Native C++ event loop integration via `uWebSockets.js` v20 delivers exceptional I/O throughput, microsecond fan-out latencies, and minimal memory consumption under tens of thousands of concurrent connections.
+- **Kernel-Grade uWebSockets.js Engine**: Native C++ event loop integration via `uWebSockets.js` v20 delivers high I/O throughput, low-latency fan-out, and minimal memory consumption under tens of thousands of concurrent connections.
 - **In-Memory Channel & Document Mesh**: High-performance local pub/sub, room subscription management, and document state fan-out with configurable sender echo behavior.
 - **Multi-Device Presence & Awareness**: Track user leases across multiple browser tabs and devices with aggregated online/idle statuses, live typing indicators, and cursor positions.
 - **Zero-Trust Security & Pre-Handshake Auth**: Connections are strictly authenticated before socket promotion or membership admission. Fine-grained async authorization gates every join, read, write, and publish action.
 - **Deterministic Backpressure & Resource Bounds**: Protection against slow consumers, memory leaks, and buffer bloat via per-connection queue caps, frame size validation, and graceful backpressure drops.
 - **Single O(N) Shared Heartbeat Sweeper**: Sweeps all registered sockets from a single unref'd timer loop, eliminating per-socket timer allocations and avoiding event loop degradation.
 - **Native CRDT Collaboration**: Integrated Conflict-free Replicated Data Types (RGA for text, LWW-Map for metadata) with Vector Clocks for causal consistency.
-- **Provable End-to-End Encryption (E2EE)**: Optional zero-knowledge Libsodium envelope encryption (X25519, HKDF-SHA-256, XChaCha20-Poly1305, Ed25519). The hub routes encrypted ciphertext envelopes blindly without ever holding keys or decrypting payloads.
+- **Provable End-to-End Encryption (E2EE)**: Optional zero-knowledge Libsodium envelope encryption (X25519, HKDF-SHA-256, XSalsa20-Poly1305, Ed25519). The hub routes encrypted ciphertext envelopes blindly without ever holding keys or decrypting payloads.
 - **Browser-Safe Client SDK**: A full-featured client SDK (`@oneunit/realtime/client`) with zero server dependencies, automatic reconnect with jittered exponential backoff, typed channels, and presence hooks.
 
 ```
@@ -111,7 +111,7 @@
 3. **Live Presence & Ephemeral Awareness**: Real-time user statuses ("online", "idle", "busy"), live typing indicators, and multi-user cursor tracking synchronized across browser viewports.
 4. **Privacy-Critical & Zero-Knowledge Applications**: Regulated messaging (healthcare, finance, enterprise communications) where the server must route encrypted envelopes blindly without accessing plaintext.
 5. **High-Frequency Live Dashboards & Push Feeds**: Financial market feeds, sports scores, IoT telemetry, and live auction platforms that require sub-millisecond fan-out and strict backpressure isolation.
-6. **Edge WebSocket Termination Gateways**: High-performance ingress instances running uWebSockets.js that terminate millions of long-lived client sockets, authenticate requests at the edge, and feed backend systems.
+6. **Edge WebSocket Termination Gateways**: High-performance ingress instances running uWebSockets.js that terminate many long-lived client sockets, authenticate requests at the edge, and feed backend systems.
 
 ---
 
@@ -124,7 +124,7 @@
 | **Backpressure Handling** | Explicit per-socket queue limits & backpressure drops | Unbounded internal memory buffer growth |
 | **Heartbeat Model** | Single O(N) unref'd timer for all connections | Per-socket `setInterval` timers (event loop strain) |
 | **Authorization** | Fine-grained async hooks per action (`join`, `publish`, etc.) | Ad-hoc middleware or socket-level only |
-| **Client Identity** | Zero-trust verified `Principal` bound at handshake | Arbitrary client claims trusted in messages |
+| **Client Identity** | Verified `Principal` bound at handshake | Arbitrary client claims trusted in messages |
 | **Encryption** | Native Libsodium E2EE envelope routing | Must be implemented manually from scratch |
 | **Collaboration** | Built-in CRDT engine (RGA, LWW-Map, Vector Clocks) | Requires separate Yjs/Automerge integration |
 | **Presence Engine** | Ephemeral device lease aggregation with TTL expiry | Simple set/map of connection IDs |
@@ -609,7 +609,7 @@ console.log(new TextDecoder().decode(opened.plaintext));
 // "Classified top-secret message"
 ```
 
-- **Primitives**: X25519 ECDH key agreement, HKDF-SHA-256 key derivation, XChaCha20-Poly1305 AEAD authenticated symmetric encryption, and Ed25519 digital signatures.
+- **Primitives**: X25519 ECDH key agreement, HKDF-SHA-256 key derivation, XSalsa20-Poly1305 AEAD authenticated symmetric encryption, and Ed25519 digital signatures.
 - **Fail-Closed Guarantee**: Malformed envelopes, untrusted keys, signature mismatches, or replay attempts throw typed `E2EEError` exceptions.
 
 ---
@@ -876,7 +876,7 @@ npm run clean       # Remove build artifacts and tsbuildinfo
 npm run build       # Compile TypeScript to dist/
 npm run typecheck   # Typecheck src/, test/, and examples/
 npm run lint        # Run ESLint across codebase
-npm test            # Run Vitest test suite (200+ unit & integration tests)
+npm test            # Run Vitest test suite (201 unit & integration tests)
 npm run pack:check  # Dry-run npm pack to audit packaged files
 ```
 

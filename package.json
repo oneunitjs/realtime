@@ -23,14 +23,14 @@
       "default": "./dist/core/core-hub.js"
     },
     "./e2ee": {
-      "types": "./dist/e2ee/primitives.d.ts",
-      "import": "./dist/e2ee/primitives.js",
-      "default": "./dist/e2ee/primitives.js"
+      "types": "./dist/e2ee/index.d.ts",
+      "import": "./dist/e2ee/index.js",
+      "default": "./dist/e2ee/index.js"
     },
-    "./errors": {
-      "types": "./dist/errors/index.d.ts",
-      "import": "./dist/errors/index.js",
-      "default": "./dist/errors/index.js"
+    "./error": {
+      "types": "./dist/error/index.d.ts",
+      "import": "./dist/error/index.js",
+      "default": "./dist/error/index.js"
     },
     "./presence": {
       "types": "./dist/presence/index.d.ts",

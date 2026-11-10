@@ -123,6 +123,11 @@ export class DocumentAdapter {
     return count;
   }
 
+  /** Total number of documents with at least one subscriber. */
+  documentCount(): number {
+    return this.docSubscribers.size;
+  }
+
   /** Count subscribers to a document. */
   count(documentId: string): number {
     const subs = this.subscriptions.get(documentId);

@@ -1,7 +1,7 @@
 {
   "name": "@oneunit/realtime",
   "version": "2.0.0",
-  "description": "Local realtime WebSocket infrastructure: in-memory channels, backpressure, heartbeats, limits, auth hooks, a transport adapter, E2EE helpers. No broker included.",
+  "description": "Local realtime WebSocket infrastructure for Node.js: in-memory channels and fan-out, adaptive backpressure, shared heartbeat timer, connection and document rooms, auth/authorization hooks, transport adapter (uWebSockets.js), Libsodium end-to-end encryption, and CRDT collaboration. Single-process, zero-broker, transport-neutral core.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -88,6 +88,7 @@
     "dist",
     "src",
     "examples",
+    "docs",
     "LICENSE",
     "README.md",
     "ARCHITECTURE.md",

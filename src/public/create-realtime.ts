@@ -139,6 +139,7 @@ class RealtimeServerImpl implements RealtimeServer {
   private startPromise: Promise<RealtimeAddress> | null = null;
   private closePromise: Promise<RealtimeShutdownResult> | null = null;
   private readonly listeners = new Map<string, Set<(arg: unknown) => void>>();
+  private lifecycleLock: Promise<unknown> = Promise.resolve();
 
   private readonly mode: RealtimeMode;
   private readonly path: string;
@@ -224,22 +225,32 @@ class RealtimeServerImpl implements RealtimeServer {
   }
 
   async start(): Promise<RealtimeAddress> {
-    if (this._state === "closed") {
-      throw new Error("REALTIME_ALREADY_CLOSED: Cannot start after close");
-    }
-    if (this._state === "failed") {
-      throw new Error("REALTIME_START_FAILED: Previous start failed");
-    }
-    if (this.startPromise) {
-      return this.startPromise;
-    }
-    if (this._state === "ready") {
-      return Promise.resolve(this._address as RealtimeAddress);
-    }
+    // Serialize through lifecycle lock to prevent start/close races.
+    this.lifecycleLock = this.lifecycleLock.then(async () => {
+      if (this._state === "closed") {
+        throw new Error("REALTIME_ALREADY_CLOSED: Cannot start after close");
+      }
+      if (this._state === "failed") {
+        throw new Error("REALTIME_START_FAILED: Previous start failed");
+      }
+      if (this.startPromise) {
+        return this.startPromise;
+      }
+      if (this._state === "ready") {
+        return Promise.resolve(this._address as RealtimeAddress);
+      }
+      if (this._state === "draining") {
+        throw new Error(
+          "REALTIME_CLOSING: Cannot start while server is draining",
+        );
+      }
 
-    this._state = "starting";
-    this.startPromise = this.doStart();
-    return this.startPromise;
+      this._state = "starting";
+      this.startPromise = this.doStart();
+      return this.startPromise;
+    });
+
+    return this.lifecycleLock as Promise<RealtimeAddress>;
   }
 
   private async doStart(): Promise<RealtimeAddress> {
@@ -298,37 +309,57 @@ class RealtimeServerImpl implements RealtimeServer {
   }
 
   async close(options?: { timeoutMs?: number }): Promise<RealtimeShutdownResult> {
-    if (this.closePromise) {
-      return this.closePromise;
-    }
-    if (this._state === "closed") {
-      return { drainedConnections: 0, forcedClose: false, durationMs: 0 };
-    }
+    // Serialize through lifecycle lock to prevent start/close races.
+    this.lifecycleLock = this.lifecycleLock.then(async () => {
+      if (this.closePromise) {
+        return this.closePromise;
+      }
+      if (this._state === "closed") {
+        return { drainedConnections: 0, forcedClose: false, durationMs: 0 };
+      }
 
-    this._state = "draining";
-    this.closePromise = this.doClose(options?.timeoutMs ?? CLOSE_DEADLINE_DEFAULT_MS);
-    return this.closePromise;
+      this._state = "draining";
+      this.closePromise = this.doClose(options?.timeoutMs ?? CLOSE_DEADLINE_DEFAULT_MS);
+      return this.closePromise;
+    });
+
+    return this.lifecycleLock as Promise<RealtimeShutdownResult>;
   }
 
   private async doClose(timeoutMs: number): Promise<RealtimeShutdownResult> {
     const started = Date.now();
     const connectionCount = this.adapter?.connectionCount ?? 0;
-    await this.hub.close();
+    let hubCloseError: unknown;
+    let timeoutWon = false;
 
     try {
-      await Promise.race([
-        this.adapter?.close() ?? Promise.resolve(),
-        new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-      ]);
-      this.adapter = null;
+      await this.hub.close();
     } catch (error) {
-      this.logger.error?.({ err: error }, "close error");
+      hubCloseError = error;
+      this.logger.error?.({ err: error }, "Hub shutdown failed");
+    } finally {
+      let resolved = false;
+      const timeoutTimer = setTimeout(() => {
+        timeoutWon = true;
+        resolved = true;
+      }, timeoutMs);
+
+      try {
+        await this.adapter?.close() ?? Promise.resolve();
+      } catch (error) {
+        this.logger.error?.({ err: error }, "close error");
+      }
+
+      if (!resolved) {
+        clearTimeout(timeoutTimer);
+      }
+      this.adapter = null;
     }
 
     this._state = "closed";
     const result: RealtimeShutdownResult = {
       drainedConnections: connectionCount,
-      forcedClose: Date.now() - started >= timeoutMs,
+      forcedClose: timeoutWon,
       durationMs: Date.now() - started,
     };
     this.emit("closed", result);

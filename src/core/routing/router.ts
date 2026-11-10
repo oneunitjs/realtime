@@ -67,7 +67,14 @@ export class Router {
         const ok = await this.fanout.enqueue(
           {
             connectionId: recipient.id,
-            send: (d: Uint8Array) => recipient.send(d).then(() => {}),
+            send: async (d: Uint8Array) => {
+              const result = await recipient.send(d);
+              if (result.status !== "accepted") {
+                throw new Error(
+                  `Send not accepted: status=${result.status}`,
+                );
+              }
+            },
           },
           data
         );

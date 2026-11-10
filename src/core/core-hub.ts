@@ -996,9 +996,14 @@ export class Hub {
 
   private async stepMarkClosed(connectionId: string): Promise<void> {
     this.registry.markClosed(connectionId);
-    this.registry.remove(connectionId);
+    const entry = this.registry.remove(connectionId);
     this.codecs.delete(connectionId);
-    this.metrics.increment("hub.connections", -1);
+    // Only decrement the connection gauge if the connection was counted
+    // (i.e., reached the authenticated state). Connections that failed
+    // authentication were never incremented.
+    if (entry?.principal) {
+      this.metrics.increment("hub.connections", -1);
+    }
     this.metrics.increment("hub.closed");
   }
 

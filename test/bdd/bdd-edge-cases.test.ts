@@ -233,11 +233,11 @@ describe("Given an unknown key epoch, When opening, Then UnknownEpochError", () 
   });
 });
 
-describe("Given duplicate message delivery, When ReplayGuard.accept, Then second is rejected", () => {
-  it("Given same sender+messageId twice, When accept, Then second returns false", () => {
+describe("Given duplicate message delivery, When ReplayGuard.consume, Then second is rejected", () => {
+  it("Given same sender+messageId twice, When consume, Then second returns false", () => {
     const guard = new ReplayGuard();
-    expect(guard.accept("dev-1", "msg-1")).toBe(true);
-    expect(guard.accept("dev-1", "msg-1")).toBe(false);
+    expect(guard.consume("dev-1", "msg-1")).toBe(true);
+    expect(guard.consume("dev-1", "msg-1")).toBe(false);
   });
 });
 

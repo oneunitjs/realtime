@@ -239,13 +239,13 @@ describe("E2EE envelope seal/open round-trip", () => {
 });
 
 describe("E2EE replay protection", () => {
-  it("rejects duplicate message delivery", async () => {
+  it("rejects duplicate message delivery", () => {
     const guard = new ReplayGuard();
-    expect(guard.accept("dev-1", "msg-1")).toBe(true);
-    expect(guard.accept("dev-1", "msg-1")).toBe(false); // duplicate
-    expect(guard.accept("dev-1", "msg-2")).toBe(true);
+    expect(guard.consume("dev-1", "msg-1")).toBe(true);
+    expect(guard.consume("dev-1", "msg-1")).toBe(false); // duplicate
+    expect(guard.consume("dev-1", "msg-2")).toBe(true);
     // A different device can reuse a message id.
-    expect(guard.accept("dev-2", "msg-1")).toBe(true);
+    expect(guard.consume("dev-2", "msg-1")).toBe(true);
   });
 });
 

@@ -195,20 +195,43 @@ export class KeyNotFoundError extends E2EEError {
  * rejects duplicates. docs/e2ee/e2ee-encryption.md §7.1: message IDs help
  * deduplication; a bounded out-of-order counter window is a client policy
  * layered on top. State is advanced only after successful authentication.
+ *
+ * Bounded to prevent unbounded memory growth: evicts the oldest entry when
+ * the maximum is reached.
  */
 export class ReplayGuard {
-  private readonly seenMessageIds = new Set<string>();
+  private readonly seenMessageIds = new Map<string, number>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 10_000) {
+    this.maxEntries = maxEntries;
+  }
 
   /**
    * Record an accepted message. Returns false if it is a duplicate.
    * Callers treat `false` as reject (fail closed).
    */
-  accept(senderDeviceId: string, messageId: string): boolean {
+  consume(senderDeviceId: string, messageId: string): boolean {
     const key = `${senderDeviceId}:${messageId}`;
+
     if (this.seenMessageIds.has(key)) {
       return false; // duplicate
     }
-    this.seenMessageIds.add(key);
+
+    // Evict oldest entry if at capacity
+    if (this.seenMessageIds.size >= this.maxEntries) {
+      const firstKey = this.seenMessageIds.keys().next().value;
+      if (firstKey !== undefined) {
+        this.seenMessageIds.delete(firstKey);
+      }
+    }
+
+    this.seenMessageIds.set(key, Date.now());
     return true;
+  }
+
+  /** Current number of tracked message IDs. */
+  size(): number {
+    return this.seenMessageIds.size;
   }
 }

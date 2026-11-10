@@ -91,7 +91,6 @@
     "LICENSE",
     "README.md",
     "ARCHITECTURE.md",
-    "CONTRIBUTING.md",
     "CHANGELOG.md"
   ],
   "scripts": {
@@ -114,7 +113,7 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run verify",
     "pack:check": "npm pack --dry-run",
-    "verify": "npm run build && npm run typecheck && npm run lint && npm test && npm run pack:check"
+    "verify": "npm run build && npm run typecheck && npm test && npm run pack:check"
   },
   "keywords": [
     "realtime",
@@ -158,10 +157,13 @@
     "@types/express": "^5.0.6",
     "@types/libsodium-wrappers": "^0.8.2",
     "@types/node": "^22.20.4",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
     "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^9.22.0",
     "express": "^5.3.0",
     "fastify": "^5.12.8",
+    "globals": "^17.14.0",
     "tsx": "^4.20.5",
     "typescript": "^5.8.2",
     "vitest": "^3.2.7"

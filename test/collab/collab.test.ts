@@ -69,6 +69,33 @@ describe("collab — RGA concurrent inserts converge", () => {
     expect(rga.render()).toBe(before);
   });
 
+  it("rejects unsafe integer operation counters", () => {
+    expect(() => validateOperation({
+      kind: "text.insert", opId: { actorId: "a", counter: Number.MAX_SAFE_INTEGER + 1 },
+      deps: {}, after: "ROOT", value: "x",
+    })).toThrow(/counter/);
+  });
+
+  it("rejects actor IDs containing the element-id separator", () => {
+    expect(() => validateOperation({
+      kind: "text.insert", opId: { actorId: "a\0b", counter: 1 },
+      deps: {}, after: "ROOT", value: "x",
+    })).toThrow(/actorId/);
+  });
+
+  it("rejects malformed null element references without throwing a TypeError", () => {
+    expect(() => validateOperation({
+      kind: "text.delete", opId: { actorId: "a", counter: 1 }, deps: {}, target: null,
+    })).toThrow(/ElementId/);
+  });
+
+  it("rejects non-JSON map values", () => {
+    expect(() => validateOperation({
+      kind: "map.set", opId: { actorId: "a", counter: 1 }, deps: {},
+      key: "k", value: undefined, logicalTime: 1,
+    })).toThrow(/JSON-compatible/);
+  });
+
   it("delete-before-insert: target not known throws, never silently drops", () => {
     const rga = new RgaSequence();
     expect(() =>

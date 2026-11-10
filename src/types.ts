@@ -6,10 +6,8 @@
  * definition of every shape.
  */
 
-import type { Hub as RealtimeHub } from "./core/core-hub.js";
 import type { TransportConnection, Unsubscribe } from "./core/connection/connection.types.js";
-export type { RealtimeHub };
-export type { TransportConnection, Unsubscribe, HandshakeContext, Principal } from "./core/connection/connection.types.js";
+import type { Logger } from "./error/index.js";
 
 // ---------------------------------------------------------------------------
 // Connection & client
@@ -142,7 +140,6 @@ export interface Channel<TMessage = unknown> {
 // Logging
 // ---------------------------------------------------------------------------
 
-import type { Logger } from "./error/index.js";
 export type { Logger };
 
 // ---------------------------------------------------------------------------
@@ -179,16 +176,6 @@ export interface BackpressureOptions {
   maxConsecutiveDrops: number;
   maxQueuedBytes: number;
   maxQueuedMessages: number;
-}
-
-export interface RealtimeHubOptions {
-  limits?: Partial<RealtimeLimits>;
-  backpressure?: Partial<BackpressureOptions>;
-  heartbeat?: false | Partial<HeartbeatOptions>;
-  authenticate?: AuthenticateHook;
-  authorize?: AuthorizeHook;
-  logger?: Logger;
-  onEvent?: (event: RealtimeEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,49 +225,4 @@ export interface RealtimeEvent {
   reason?: string;
   metadata?: Record<string, unknown>;
   at: number;
-}
-
-export interface RealtimeHubStats {
-  connections: number;
-  channels: number;
-  subscribers: number;
-  messagesSent: number;
-  messagesDropped: number;
-  sendFailures: number;
-  broadcasts: number;
-  connectionsAccepted: number;
-  connectionsRejected: number;
-  channelsRemoved: number;
-  authorizationsDenied: number;
-  heartbeatsSent: number;
-  connectionsTerminated: number;
-}
-
-// ---------------------------------------------------------------------------
-// E2EE
-// ---------------------------------------------------------------------------
-
-/** Wire format of an end-to-end encrypted frame. */
-export interface E2EEFrame {
-  type: "e2ee";
-  ciphertext: string;
-}
-
-export interface KeyPair {
-  publicKey: Buffer;
-  privateKey: Buffer;
-}
-
-export interface SharedKeyData {
-  publicKey: Buffer;
-  sharedKey: Buffer;
-}
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
-export interface CreateRealtimeHubOptions extends RealtimeHubOptions {
-  /** Generate a hub key pair and enable E2EE, awaiting libsodium readiness first. */
-  e2ee?: boolean;
 }

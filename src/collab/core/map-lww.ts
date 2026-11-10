@@ -109,6 +109,24 @@ export class LwwMap {
   }
 
   /**
+   * Bulk-load registers into the map (used to restore a snapshot).
+   * Registers are inserted without re-validating deps; the caller is
+   * responsible for snapshot integrity. The winning register per key is kept.
+   */
+  loadRegisters(registers: readonly LwwRegister[]): void {
+    for (const reg of registers) {
+      const existing = this.registers.get(reg.key);
+      if (!existing) {
+        this.registers.set(reg.key, reg);
+        continue;
+      }
+      if (compareLwwOrder(lwwOrderKey(reg), lwwOrderKey(existing)) > 0) {
+        this.registers.set(reg.key, reg);
+      }
+    }
+  }
+
+  /**
    * Apply a map.set operation. The winning register for the key is the one
    * with the greatest (logicalTime, actorId, counter).
    */
@@ -132,6 +150,9 @@ export class LwwMap {
     };
     const existing = this.registers.get(op.key);
     if (!existing) {
+      if (this.registers.size >= this.maxKeys) {
+        throw new LwwMapError("Maximum map keys exceeded");
+      }
       this.registers.set(op.key, incoming);
       return;
     }
@@ -155,6 +176,9 @@ export class LwwMap {
     };
     const existing = this.registers.get(op.key);
     if (!existing) {
+      if (this.registers.size >= this.maxKeys) {
+        throw new LwwMapError("Maximum map keys exceeded");
+      }
       this.registers.set(op.key, incoming);
       return;
     }

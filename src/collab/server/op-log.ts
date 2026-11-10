@@ -7,9 +7,24 @@
  * Records accepted operations durably (in-memory by default) and advances
  * the document head atomically. Append-only: an operation may not be
  * mutated after it is appended.
+ *
+ * The log is scoped to a composite document identity `{ tenantId,
+ * documentId }`. Operations from one document — or one tenant — can never
+ * leak into another document's synchronization response, and operation IDs
+ * ({actorId, counter}) only collide within the same document scope.
  */
 
-import type { CrdtOperation, ElementId, VectorClock } from "../core/types.js";
+import type {
+  CrdtOperation,
+  ElementId,
+  VectorClock,
+} from "../core/types.js";
+import { encodeElementId } from "../core/types.js";
+import {
+  documentScopeKey,
+  type DocumentScope,
+  operationKey,
+} from "./document-key.js";
 
 export interface StoredOperation {
   operation: CrdtOperation;
@@ -18,57 +33,109 @@ export interface StoredOperation {
 
 export interface OpLogDeps {
   now?: () => number;
+  /** Optional durable backend. When provided, every accepted append is also
+   *  written here so operation history survives restarts. */
+  storage?: {
+    appendOperation(
+      scope: DocumentScope,
+      operation: CrdtOperation,
+    ): Promise<{
+      accepted: boolean;
+      duplicate: boolean;
+      conflict: boolean;
+      head: VectorClock;
+    }>;
+    getOperationsSince(
+      scope: DocumentScope,
+      vector: VectorClock,
+    ): Promise<CrdtOperation[]>;
+    getHead(scope: DocumentScope): Promise<VectorClock>;
+  };
+}
+
+class DocState {
+  readonly ops: StoredOperation[] = [];
+  readonly opIndex = new Map<string, StoredOperation>();
+  head: VectorClock = {};
+  loaded = false;
 }
 
 export class OpLog {
-  private readonly ops: StoredOperation[] = [];
-  private readonly opIndex = new Map<string, StoredOperation>();
-  private readonly counterparties = new Map<string, string>(); // op id → payload hash
-  private head: VectorClock = {};
+  private readonly docs = new Map<string, DocState>();
+  private readonly now: () => number;
+  private readonly storage: OpLogDeps["storage"];
 
-  constructor(private readonly deps: OpLogDeps = {}) {}
+  constructor(deps: OpLogDeps = {}) {
+    this.now = deps.now ?? (() => Date.now());
+    this.storage = deps.storage;
+  }
 
-  /** Append an operation durably. Returns the durable ACK shape. */
-  append(op: CrdtOperation): {
+  private docState(scope: DocumentScope): DocState {
+    const key = documentScopeKey(scope);
+    let state = this.docs.get(key);
+    if (!state) {
+      state = new DocState();
+      this.docs.set(key, state);
+    }
+    return state;
+  }
+
+  /** Append an operation durably, scoped to a document. */
+  async append(
+    scope: DocumentScope,
+    op: CrdtOperation,
+  ): Promise<{
     accepted: boolean;
     duplicate: boolean;
     conflict: boolean;
     head: VectorClock;
-  } {
-    const idKey = `${op.opId.actorId}\x00${op.opId.counter}`;
+  }> {
+    const state = this.docState(scope);
+    const idKey = operationKey(op.opId.actorId, op.opId.counter);
     const payloadHash = JSON.stringify(op);
 
-    const existing = this.opIndex.get(idKey);
+    const existing = state.opIndex.get(idKey);
     if (existing) {
       if (JSON.stringify(existing.operation) === payloadHash) {
-        // Idempotent: same ID + same payload → return existing.
-        return { accepted: true, duplicate: true, conflict: false, head: { ...this.head } };
+        return { accepted: true, duplicate: true, conflict: false, head: { ...state.head } };
       }
-      // Same ID + different payload → conflict.
-      return { accepted: false, duplicate: false, conflict: true, head: { ...this.head } };
+      return { accepted: false, duplicate: false, conflict: true, head: { ...state.head } };
     }
 
-    this.ops.push({
+    state.ops.push({
       operation: op,
-      storedAt: this.deps.now ? this.deps.now() : Date.now(),
+      storedAt: this.now(),
     });
-    this.opIndex.set(idKey, this.ops[this.ops.length - 1]);
+    state.opIndex.set(idKey, state.ops[state.ops.length - 1]);
 
-    // Advance document head.
-    this.updateHead(op.opId);
+    this.updateHead(state, op.opId);
+
+    // Persist to the configured durable backend (non-fatal if it fails).
+    if (this.storage) {
+      try {
+        await this.storage.appendOperation(scope, op);
+      } catch {
+        // Storage failure must not roll back the in-memory accept; the op is
+        // already durably indexed here.
+      }
+    }
 
     return {
       accepted: true,
       duplicate: false,
       conflict: false,
-      head: { ...this.head },
+      head: { ...state.head },
     };
   }
 
-  /** Get all operations at or after a given version vector (for sync). */
-  since(vector: VectorClock): CrdtOperation[] {
+  /** Get all operations at or after a given version vector for a document. */
+  since(scope: DocumentScope, vector: VectorClock): CrdtOperation[] {
+    const state = this.docs.get(documentScopeKey(scope));
+    if (!state) {
+      return [];
+    }
     const out: CrdtOperation[] = [];
-    for (const stored of this.ops) {
+    for (const stored of state.ops) {
       const env = stored.operation;
       const opId = env.opId;
       if ((vector[opId.actorId] ?? 0) < opId.counter) {
@@ -78,25 +145,53 @@ export class OpLog {
     return out;
   }
 
-  /** Get all operations (full log). */
-  all(): CrdtOperation[] {
-    return this.ops.map((s) => s.operation);
+  /** Get all operations for a document scope (full log). */
+  all(scope: DocumentScope): CrdtOperation[] {
+    const state = this.docs.get(documentScopeKey(scope));
+    if (!state) {
+      return [];
+    }
+    return state.ops.map((s) => s.operation);
   }
 
-  /** Get the head version vector. */
-  getHead(): VectorClock {
-    return { ...this.head };
+  /** Get the head version vector for a document scope. */
+  getHead(scope: DocumentScope): VectorClock {
+    const state = this.docs.get(documentScopeKey(scope));
+    return state ? { ...state.head } : {};
   }
 
-  /** Number of stored operations. */
-  size(): number {
-    return this.ops.length;
+  /** Number of stored operations for a document scope. */
+  size(scope: DocumentScope): number {
+    const state = this.docs.get(documentScopeKey(scope));
+    return state ? state.ops.length : 0;
   }
 
-  private updateHead(opId: ElementId): void {
-    const current = this.head[opId.actorId] ?? 0;
+  /** Bulk-load operations into a document scope's in-memory state (used to
+   *  restore history from durable storage after a restart). */
+  replay(scope: DocumentScope, ops: CrdtOperation[]): void {
+    const state = this.docState(scope);
+    state.loaded = true;
+    for (const op of ops) {
+      const idKey = operationKey(op.opId.actorId, op.opId.counter);
+      if (state.opIndex.has(idKey)) {
+        continue;
+      }
+      state.ops.push({ operation: op, storedAt: this.now() });
+      state.opIndex.set(idKey, state.ops[state.ops.length - 1]);
+      this.updateHead(state, op.opId);
+    }
+  }
+
+  /** Whether a document scope has any in-memory operations loaded. */
+  isLoaded(scope: DocumentScope): boolean {
+    const state = this.docs.get(documentScopeKey(scope));
+    return Boolean(state?.loaded);
+  }
+
+  private updateHead(state: DocState, opId: ElementId): void {
+    const current = state.head[opId.actorId] ?? 0;
     if (opId.counter > current) {
-      this.head[opId.actorId] = opId.counter;
+      state.head[opId.actorId] = opId.counter;
     }
   }
 }

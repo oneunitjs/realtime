@@ -4,7 +4,7 @@
 **Status:** Spec / Implementation Guide  
 **Focus:** Web-based real-time connection runtime (WebSocket-first)  
 **Last updated:** 2026-11-06  
-**Related:** [Collaboration Engine Architecture](./COLLABORATION_ENGINE_ARCHITECTURE.md)
+**Related:** [Collaboration Engine Architecture](../collab/collaboration-engine.md)
 
 ---
 

@@ -139,7 +139,12 @@ describe("production websocket path", () => {
 
   it("rejects a missing join channel", async () => {
     const port = await freePort();
-    const realtime = createRealtime({ host: "127.0.0.1", port, path: "/ws" });
+    const realtime = createRealtime({
+      host: "127.0.0.1",
+      port,
+      path: "/ws",
+      authenticate: async () => ({ userId: "anonymous", tenantId: "default" }),
+    });
     servers.push(realtime);
     await realtime.listen();
 

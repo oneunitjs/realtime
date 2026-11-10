@@ -203,7 +203,7 @@ async function withDeadline<T>(
 }
 ```
 
-Use the platform’s timer abstraction in production and in tests so fake clocks work. Propagate the `AbortSignal` into downstream calls (DB, broker, crypto, Collaboration Engine).
+Use the platform’s timer abstraction at runtime and in tests so fake clocks work. Propagate the `AbortSignal` into downstream calls (DB, broker, crypto, Collaboration Engine).
 
 ### 5.3 Disconnect and abort
 
@@ -221,7 +221,7 @@ The registry is the **single source of truth** that maps:
 
 ### 6.1 Required coverage
 
-Every error that production code can throw or that middleware can surface must be registered, including (non-exhaustive):
+Every error that runtime code can throw or that middleware can surface must be registered, including (non-exhaustive):
 
 | Internal concept | Typical public code |
 |------------------|---------------------|
@@ -307,7 +307,7 @@ Minimum coverage:
 | Area | What to assert |
 |------|----------------|
 | Mapping | Every registered internal error produces the correct public `ErrorCode` and `retryable` flag |
-| Subclass coverage | All production subclasses are registered; no orphan codes |
+| Subclass coverage | All runtime subclasses are registered; no orphan codes |
 | Serialization | Client payload never contains stacks, tokens, or raw `details` |
 | Cancellation | Aborted work stops; cleanup runs; correct code returned |
 | Retry eligibility | Only retryable + idempotent operations are retried; budgets and deadlines are respected |

@@ -5,6 +5,10 @@
  *
  * Before accepting an operation we validate: size limits, actor binding,
  * counter monotonicity, document permission, allowed keys, schema, deps.
+ *
+ * Actor binding is the primary security check: opId.actorId must equal the
+ * actorId of the principal authenticated for the connection. The actorOwner
+ * map is only a secondary ownership cross-check.
  */
 
 import type {
@@ -15,6 +19,7 @@ import type {
 import { CORE_LIMITS } from "../core/types.js";
 import { validateOperation } from "../core/encode.js";
 import type { DocumentAcl } from "./acl.js";
+import type { AuthenticatedPrincipal } from "./principal.js";
 
 export class ValidationError extends Error {
   constructor(
@@ -29,8 +34,8 @@ export class ValidationError extends Error {
 
 export interface ValidatorDeps {
   acl: DocumentAcl;
-  /** Map from actorId to owning userId. */
-  actorOwner: Map<string, string>;
+  /** Optional secondary actor-ownership cross-check. */
+  actorOwner?: Map<string, string>;
 }
 
 export class OpValidator {
@@ -43,7 +48,7 @@ export class OpValidator {
   async validate(params: {
     operation: unknown;
     documentId: string;
-    principal: { userId: string; roles: readonly string[] };
+    principal: AuthenticatedPrincipal;
     actorId: string;
   }): Promise<CrdtOperation> {
     // 1. Schema / shape / size validation.
@@ -52,19 +57,31 @@ export class OpValidator {
 
     // 2. Actor binding: opId.actorId matches the actor bound to the session.
     if (op.opId.actorId !== params.actorId) {
-      throw new ValidationError("INVALID_ACTOR", "opId.actorId does not match bound actor");
+      throw new ValidationError(
+        "INVALID_ACTOR",
+        "opId.actorId does not match bound actor",
+      );
     }
 
-    // 3. Actor ownership: actor belongs to this principal.
-    const owner = this.deps.actorOwner.get(params.actorId);
-    if (owner !== undefined && owner !== params.principal.userId) {
-      throw new ValidationError("ACTOR_OWNER_MISMATCH", "Actor does not belong to this principal");
+    // 3. Actor ownership (secondary cross-check): actor belongs to this
+    //    principal, when an actor registry is configured.
+    if (this.deps.actorOwner !== undefined) {
+      const owner = this.deps.actorOwner.get(params.actorId);
+      if (owner !== undefined && owner !== params.principal.userId) {
+        throw new ValidationError(
+          "ACTOR_OWNER_MISMATCH",
+          "Actor does not belong to this principal",
+        );
+      }
     }
 
     // 4. Document write permission.
     const canWrite = await this.deps.acl.canWrite(params.principal, params.documentId);
     if (!canWrite) {
-      throw new ValidationError("DOCUMENT_FORBIDDEN", `No write access to ${params.documentId}`);
+      throw new ValidationError(
+        "DOCUMENT_FORBIDDEN",
+        `No write access to ${params.documentId}`,
+      );
     }
 
     // 5. Allowed map keys / paths (basic: non-empty keys only; deeper

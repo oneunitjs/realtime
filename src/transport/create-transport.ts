@@ -1,7 +1,6 @@
 /**
- * Choose a WebSocket listener: uWebSockets.js when the native addon loads,
- * otherwise a Node http upgrade fallback with the same TransportConnection
- * contract.
+ * Create a uWebSockets.js transport adapter. uWebSockets.js is the sole
+ * WebSocket engine for this package; there is no Node http fallback.
  */
 
 import {
@@ -10,7 +9,6 @@ import {
   type UwsTransportAdapter,
   type UwsTransportAdapterOptions,
 } from "./uws/uws-transport.js";
-import { NodeHttpTransportAdapter } from "./node-http/node-http-transport.js";
 
 export interface RealtimeTransport {
   readonly connectionCount: number;
@@ -24,15 +22,21 @@ export async function createRealtimeTransport(
   options: UwsTransportAdapterOptions,
 ): Promise<RealtimeTransport> {
   const uws = await loadUwsApp();
-  if (uws) {
-    try {
-      uws.App();
-      return createUwsTransport(options);
-    } catch {
-      // Native addon present but unusable (ABI/glibc). Fall through.
-    }
+  if (!uws) {
+    throw new Error(
+      "uWebSockets.js is required but not available. Install the uwebsocket dependency.",
+    );
   }
-  return new NodeHttpTransportAdapter(options);
+  try {
+    uws.App();
+    return createUwsTransport(options);
+  } catch (error) {
+    throw new Error(
+      `uWebSockets.js is present but unusable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 export type { UwsTransportAdapter, UwsTransportAdapterOptions };

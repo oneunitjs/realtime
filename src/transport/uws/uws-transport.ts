@@ -183,9 +183,13 @@ class UwsTransportConnection implements TransportConnection {
       if (rc === 1) {
         return Promise.resolve({ status: "accepted", bufferedBytes: bufferedAfter });
       }
-      // rc === 0 (backpressured) or rc === 2 (dropped due to limit) both mean
-      // the local send path cannot accept more data under current policy. The
-      // `dropped` callback surfaces rc === 2 as a separate delivery event.
+      // rc === 0 (backpressured): accepted but the local buffer is full.
+      // rc === 2 (dropped due to backpressure limit): the message was dropped
+      // by uWS and never reached the socket. Distinguish it so callers can
+      // count dropped deliveries separately from backpressured ones.
+      if (rc === 2) {
+        return Promise.resolve({ status: "dropped", bufferedBytes: bufferedAfter });
+      }
       return Promise.resolve({ status: "backpressured", bufferedBytes: bufferedAfter });
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error("Send failed"));

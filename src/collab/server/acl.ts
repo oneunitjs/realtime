@@ -8,14 +8,22 @@
  * document:write at every required boundary.
  */
 
+import type { AuthenticatedPrincipal } from "./principal.js";
+
 export interface ActorInfo {
   userId: string;
   actorId: string;
 }
 
 export interface DocumentAcl {
-  canRead(principal: { userId: string; roles: readonly string[] }, documentId: string): boolean | Promise<boolean>;
-  canWrite(principal: { userId: string; roles: readonly string[] }, documentId: string): boolean | Promise<boolean>;
+  canRead(
+    principal: AuthenticatedPrincipal,
+    documentId: string,
+  ): boolean | Promise<boolean>;
+  canWrite(
+    principal: AuthenticatedPrincipal,
+    documentId: string,
+  ): boolean | Promise<boolean>;
 }
 
 /** Default allow-all ACL for tests; production must supply a real one. */

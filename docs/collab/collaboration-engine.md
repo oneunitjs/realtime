@@ -522,7 +522,7 @@ This keeps the durable document log small and free of ephemeral noise.
 | 3 | Map LWW registers + tombstones | Metadata fields |
 | 4 | Property-based convergence tests | Prove the algorithm before adding networking |
 | 5 | Durable log, snapshots, reconnect sync, retention leases | Real web reliability |
-| 6 | Auth, quotas, multi-instance fan-out, metrics | Production readiness |
+| 6 | Auth, quotas, multi-instance fan-out, metrics | Operations & hardening |
 | 7 | Richer CRDT types (marks, blocks…) | Only after semantics and migrations are specified |
 
 ### Suggested package layout

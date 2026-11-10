@@ -51,11 +51,12 @@ export class RgaError extends Error {
 
 /** Validates an insert operation's shape and size limits. */
 function validateInsert(op: TextInsertOperation): void {
-  if (op.value.length !== 1) {
-    throw new RgaError("RGA insert value must be a single Unicode scalar");
-  }
-  if (op.value.codePointAt(0) === undefined) {
-    throw new RgaError("RGA insert value must be a valid Unicode scalar");
+  const points = Array.from(op.value);
+  if (
+    points.length !== 1 ||
+    op.value.codePointAt(0) === undefined
+  ) {
+    throw new RgaError("RGA insert value must be exactly one Unicode scalar");
   }
   const codePoint = op.value.codePointAt(0)!;
   if (
@@ -74,9 +75,9 @@ export interface RgaOptions {
 }
 
 export class RgaSequence {
-  private readonly nodes = new Map<string, RgaNode>();
+  private nodes = new Map<string, RgaNode>();
   /** children[anchorKey] = sorted ElementId[] where anchorKey is encodeElementId(id) or "ROOT" */
-  private readonly children = new Map<string, ElementId[]>();
+  private children = new Map<string, ElementId[]>();
   private versionVector: VectorClock = {};
   private readonly maxPendingOps: number;
 
@@ -232,6 +233,78 @@ export class RgaSequence {
   /** Nodes currently known (values only, tombstones included). */
   getNodes(): RgaNode[] {
     return [...this.nodes.values()];
+  }
+
+  /**
+   * Bulk-load nodes into the sequence (used to restore a snapshot).
+   * Nodes are inserted without re-validating causal deps; the caller is
+   * responsible for snapshot integrity. The derived children cache is cleared
+   * so it recomputes from the loaded node set.
+   */
+  loadNodes(nodes: readonly RgaNode[]): void {
+    const nextNodes = new Map<string, RgaNode>();
+    const nextChildren = new Map<string, ElementId[]>();
+    nextChildren.set("ROOT", []);
+
+    for (const node of nodes) {
+      const key = encodeElementId(node.id);
+      if (nextNodes.has(key)) {
+        throw new RgaError("Duplicate snapshot node");
+      }
+      nextNodes.set(key, { ...node });
+    }
+
+    // Rebuild child indexes from the loaded nodes. An anchor must either be
+    // "ROOT" or reference another loaded node.
+    for (const node of nextNodes.values()) {
+      const anchorKey =
+        node.after === "ROOT" ? "ROOT" : encodeElementId(node.after);
+      if (
+        anchorKey !== "ROOT" &&
+        !nextNodes.has(anchorKey)
+      ) {
+        throw new RgaError("Missing snapshot anchor");
+      }
+      const kids = nextChildren.get(anchorKey) ?? [];
+      kids.push(node.id);
+      nextChildren.set(anchorKey, kids);
+    }
+
+    // Reject cycles: every node must be reachable from ROOT without revisiting.
+    const visited = new Set<string>();
+    const stack: Array<ElementId | "ROOT"> = ["ROOT"];
+    while (stack.length > 0) {
+      const anchor = stack.pop()!;
+      const key = anchor === "ROOT" ? "ROOT" : encodeElementId(anchor);
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      for (const child of nextChildren.get(key) ?? []) {
+        stack.push(child);
+      }
+    }
+    for (const key of nextNodes.keys()) {
+      if (!visited.has(key)) {
+        throw new RgaError("Snapshot contains a cycle or unreachable node");
+      }
+    }
+
+    for (const kids of nextChildren.values()) {
+      kids.sort((a, b) => compareElementId(a, b));
+    }
+
+    this.nodes = nextNodes;
+    this.children = nextChildren;
+
+    // Rebuild the version vector from the loaded nodes.
+    this.versionVector = {};
+    for (const node of nextNodes.values()) {
+      const current = this.versionVector[node.id.actorId] ?? 0;
+      if (node.id.counter > current) {
+        this.versionVector[node.id.actorId] = node.id.counter;
+      }
+    }
   }
 
   private childrenOf(anchor: ElementId | "ROOT"): ElementId[] {

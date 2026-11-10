@@ -1,28 +1,22 @@
 /**
- * Bounded fan-out scheduler.
+ * Fair, bounded fan-out scheduler.
  *
- * Dispatches an encoded envelope to a set of recipients with bounded
- * concurrency, per-connection queue limits, and transport backpressure
- * handling. Slow recipients are isolated so one blocked connection does not
- * stall unrelated recipients. Partial failures are recorded without
- * converting the entire fan-out into an all-or-nothing result.
- *
- * No network I/O occurs while a room membership lock is held; the caller
- * must pass an already-resolved recipient list (authorized snapshot).
+ * Each connection has a FIFO queue and at most one active send. Different
+ * connections are dispatched round-robin up to the global concurrency limit.
+ * Queued-byte accounting includes in-flight sends, so a slow transport cannot
+ * silently grow memory without bound.
  */
 
 export interface FanoutRecipient {
   connectionId: string;
-  /** Send the encoded bytes to this recipient's local transport. Resolves
-   *  when the transport accepted the bytes (→ "written"); rejects on
-   *  failure/closed/backpressure. */
+  /** Resolves when the transport accepts the bytes; rejects on send failure. */
   send: (encoded: Uint8Array) => Promise<void>;
 }
 
 export interface FanoutOptions {
-  /** Max concurrent in-flight sends. Default 64. */
+  /** Maximum number of sends in flight across all connections. Default: 64. */
   concurrency?: number;
-  /** Per-connection queued byte limit. Default 256 KiB. */
+  /** Maximum queued plus in-flight bytes per connection. Default: 256 KiB. */
   maxQueuedBytesPerConnection?: number;
 }
 
@@ -33,29 +27,37 @@ interface PendingSend {
 }
 
 export class FanoutScheduler {
-  private readonly queues = new Map<string, PendingSend[]>(); // connectionId → pending sends
-  private readonly queuedBytes = new Map<string, number>(); // connectionId → bytes
-  private readonly active = new Set<string>(); // connectionIds currently being drained
+  private readonly queues = new Map<string, PendingSend[]>();
+  private readonly queuedBytes = new Map<string, number>();
+  private readonly active = new Set<string>();
+  private readonly ready: string[] = [];
+  private readonly readySet = new Set<string>();
   private readonly concurrency: number;
   private readonly maxQueuedBytesPerConnection: number;
   private inFlight = 0;
+  private pumping = false;
 
   constructor(options: FanoutOptions = {}) {
     this.concurrency = options.concurrency ?? 64;
     this.maxQueuedBytesPerConnection = options.maxQueuedBytesPerConnection ?? 256 * 1024;
+    if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1) {
+      throw new RangeError("concurrency must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(this.maxQueuedBytesPerConnection) || this.maxQueuedBytesPerConnection < 0) {
+      throw new RangeError("maxQueuedBytesPerConnection must be a non-negative safe integer");
+    }
   }
 
-  /**
-   * Enqueue a send for a recipient. Returns a promise that resolves to
-   * `false` if the recipient's queue is over its byte limit (drop under
-   * backpressure), `true` when the transport accepted the bytes.
-   */
   enqueue(recipient: FanoutRecipient, encoded: Uint8Array): Promise<boolean> {
+    if (!recipient.connectionId || typeof recipient.connectionId !== "string") {
+      return Promise.resolve(false);
+    }
+    if (!(encoded instanceof Uint8Array)) return Promise.resolve(false);
+
     const id = recipient.connectionId;
     const current = this.queuedBytes.get(id) ?? 0;
-
-    if (current + encoded.byteLength > this.maxQueuedBytesPerConnection) {
-      return Promise.resolve(false); // drop under backpressure
+    if (encoded.byteLength > this.maxQueuedBytesPerConnection - current) {
+      return Promise.resolve(false);
     }
 
     let queue = this.queues.get(id);
@@ -64,75 +66,79 @@ export class FanoutScheduler {
       this.queues.set(id, queue);
     }
 
-    let resolve!: (ok: boolean) => void;
-    const promise = new Promise<boolean>((res) => {
-      resolve = res;
+    const result = new Promise<boolean>((resolve) => {
+      queue!.push({ recipient, encoded, resolve });
     });
-
-    queue.push({ recipient, encoded, resolve });
     this.queuedBytes.set(id, current + encoded.byteLength);
-
-    void this.drain(id);
-    return promise;
+    this.markReady(id);
+    this.pump();
+    return result;
   }
 
-  /** Drain one recipient's queue up to concurrency limits. */
-  private async drain(connectionId: string): Promise<void> {
-    if (this.active.has(connectionId)) {
-      return; // already draining
-    }
-    this.active.add(connectionId);
-
-    try {
-      while (true) {
-        // Respect global concurrency limit.
-        while (this.inFlight >= this.concurrency) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-
-        const item = this.shift(connectionId);
-        if (!item) {
-          break;
-        }
-
-        this.inFlight += 1;
-        try {
-          await item.recipient.send(item.encoded);
-          this.queuedBytes.set(
-            connectionId,
-            Math.max(0, (this.queuedBytes.get(connectionId) ?? 0) - item.encoded.byteLength),
-          );
-          item.resolve(true);
-        } catch {
-          this.queuedBytes.set(
-            connectionId,
-            Math.max(0, (this.queuedBytes.get(connectionId) ?? 0) - item.encoded.byteLength),
-          );
-          item.resolve(false);
-        } finally {
-          this.inFlight -= 1;
-        }
-      }
-    } finally {
-      this.active.delete(connectionId);
-    }
-  }
-
-  private shift(connectionId: string): PendingSend | undefined {
-    const queue = this.queues.get(connectionId);
-    if (!queue || queue.length === 0) {
-      this.queues.delete(connectionId);
-      this.queuedBytes.delete(connectionId);
-      return undefined;
-    }
-    return queue.shift();
-  }
-
+  /** Bytes retained for this connection, including the active send. */
   queuedBytesFor(connectionId: string): number {
     return this.queuedBytes.get(connectionId) ?? 0;
   }
 
+  /** Number waiting to start; does not include an in-flight send. */
   pendingCount(connectionId: string): number {
     return this.queues.get(connectionId)?.length ?? 0;
+  }
+
+  private markReady(id: string): void {
+    if (!this.active.has(id) && !this.readySet.has(id) && (this.queues.get(id)?.length ?? 0) > 0) {
+      this.ready.push(id);
+      this.readySet.add(id);
+    }
+  }
+
+  private pump(): void {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (this.inFlight < this.concurrency && this.ready.length > 0) {
+        const id = this.ready.shift()!;
+        this.readySet.delete(id);
+        if (this.active.has(id)) continue;
+        const queue = this.queues.get(id);
+        const item = queue?.shift();
+        if (!item) {
+          this.cleanupIfIdle(id);
+          continue;
+        }
+
+        this.active.add(id);
+        this.inFlight++;
+        // Promise.resolve().then also catches transports that throw before
+        // returning a promise, keeping scheduler bookkeeping consistent.
+        void Promise.resolve()
+          .then(() => item.recipient.send(item.encoded))
+          .then(
+            () => this.finishSend(id, item, true),
+            () => this.finishSend(id, item, false),
+          );
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  private finishSend(id: string, item: PendingSend, ok: boolean): void {
+    this.queuedBytes.set(id, Math.max(0, (this.queuedBytes.get(id) ?? 0) - item.encoded.byteLength));
+    this.inFlight--;
+    this.active.delete(id);
+    this.markReady(id);
+    this.cleanupIfIdle(id);
+    // Resolve after accounting is updated so observers see a consistent state.
+    item.resolve(ok);
+    this.pump();
+  }
+
+  private cleanupIfIdle(id: string): void {
+    if (!this.active.has(id) && (this.queues.get(id)?.length ?? 0) === 0) {
+      this.queues.delete(id);
+      this.queuedBytes.delete(id);
+      this.readySet.delete(id);
+    }
   }
 }

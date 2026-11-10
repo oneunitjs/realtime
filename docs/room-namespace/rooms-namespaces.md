@@ -187,7 +187,7 @@ Never admit a member into a `required` room and then “skip” them on encrypte
 
 ## 7. Limits and Lifecycle
 
-### Production defaults (tune per product)
+### Recommended baseline defaults (tune per product)
 
 Set explicit caps for:
 

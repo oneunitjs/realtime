@@ -72,7 +72,8 @@ export interface SendOptions {
  */
 export type SendResult =
   | { status: "accepted"; bufferedBytes: number }
-  | { status: "backpressured"; bufferedBytes: number };
+  | { status: "backpressured"; bufferedBytes: number }
+  | { status: "dropped"; bufferedBytes: number };
 
 /**
  * Close event emitted when a transport connection closes.

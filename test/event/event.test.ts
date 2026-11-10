@@ -348,6 +348,42 @@ describe("event — fan-out scheduler", () => {
     await p1;
   });
 
+  it("schedules connections fairly while preserving per-connection FIFO", async () => {
+    const scheduler = new FanoutScheduler({ concurrency: 1 });
+    const order: string[] = [];
+    const recipient = (connectionId: string) => ({
+      connectionId,
+      send: async (bytes: Uint8Array) => { order.push(`${connectionId}${bytes[0]}`); },
+    });
+    const a = recipient("a");
+    const b = recipient("b");
+    await Promise.all([
+      scheduler.enqueue(a, new Uint8Array([1])),
+      scheduler.enqueue(a, new Uint8Array([2])),
+      scheduler.enqueue(b, new Uint8Array([1])),
+    ]);
+    expect(order).toEqual(["a1", "b1", "a2"]);
+    expect(scheduler.queuedBytesFor("a")).toBe(0);
+    expect(scheduler.pendingCount("a")).toBe(0);
+  });
+
+  it("recovers from synchronous transport throws and releases queue accounting", async () => {
+    const scheduler = new FanoutScheduler({ concurrency: 1 });
+    const result = await scheduler.enqueue({
+      connectionId: "broken",
+      send: () => { throw new Error("transport failed synchronously"); },
+    }, new Uint8Array([1, 2, 3]));
+    expect(result).toBe(false);
+    expect(scheduler.queuedBytesFor("broken")).toBe(0);
+    expect(scheduler.pendingCount("broken")).toBe(0);
+  });
+
+  it("validates scheduler limits", () => {
+    expect(() => new FanoutScheduler({ concurrency: 0 })).toThrow(RangeError);
+    expect(() => new FanoutScheduler({ concurrency: 1.5 })).toThrow(RangeError);
+    expect(() => new FanoutScheduler({ maxQueuedBytesPerConnection: -1 })).toThrow(RangeError);
+  });
+
   it("isolates slow recipients: fast recipient still sends", async () => {
     const scheduler = new FanoutScheduler({ concurrency: 2 });
     const results: string[] = [];

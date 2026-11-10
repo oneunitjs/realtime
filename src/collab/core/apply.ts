@@ -169,6 +169,19 @@ export class ApplyEngine {
           code: "PENDING_BUFFER_FULL",
         };
       }
+      const existingPending = this.pending.get(idKey);
+      if (existingPending) {
+        if (ApplyEngine.hashPayload(existingPending) === payloadHash) {
+          // Identical duplicate already buffered: idempotent.
+          return { status: "buffered", reason: "Already pending" };
+        }
+        // Same ID, different payload buffered: conflict.
+        return {
+          status: "rejected",
+          reason: `Pending op ${idKey} has conflicting payload`,
+          code: "CONFLICTING_OP_ID",
+        };
+      }
       this.pending.set(idKey, o);
       return { status: "buffered", reason: "Waiting for dependencies" };
     }
@@ -183,24 +196,26 @@ export class ApplyEngine {
     payloadHash: string,
   ): ApplyResult {
     const o = op as CrdtOperation;
-    this.knownOps.set(idKey, { op: o as CrdtOperation, payloadHash });
 
-    // Update actor max counter.
-    this.actorMaxCounter.set(o.opId.actorId, o.opId.counter);
-
-    // Apply to the appropriate CRDT structure.
+    // Apply to the CRDT structure FIRST. If this throws, no bookkeeping
+    // (knownOps, actor counters, version vector) is mutated, so a failed
+    // operation leaves the engine in its original state (atomic commit).
     if (o.kind === "text.insert" || o.kind === "text.delete") {
       this.rga.apply(o);
     } else if (o.kind === "map.set" || o.kind === "map.delete") {
       this.map.apply(o);
     } else {
-      this.knownOps.delete(idKey);
       return {
         status: "rejected",
         reason: `Unsupported op kind: ${(o as any).kind}`,
         code: "UNSUPPORTED_OP_KIND",
       };
     }
+
+    // Record the operation as known and advance counters only after a
+    // successful CRDT application.
+    this.knownOps.set(idKey, { op: o as CrdtOperation, payloadHash });
+    this.actorMaxCounter.set(o.opId.actorId, o.opId.counter);
 
     // Advance version vector to cover this op.
     const actor = o.opId.actorId;
@@ -227,8 +242,10 @@ export class ApplyEngine {
       const o = this.pending.get(idKey)!;
       this.pending.delete(idKey);
       const existing = this.knownOps.get(idKey);
-      if (existing && existing.payloadHash === ApplyEngine.hashPayload(o)) {
-        // Already committed via another path; just advance vector if needed.
+      if (existing) {
+        // Already committed via another path. If the payload matches it is an
+        // idempotent duplicate; if it differs the conflict was already resolved
+        // in favour of the committed operation. Do not overwrite.
         continue;
       }
       this.commit(o, idKey, ApplyEngine.hashPayload(o));
@@ -259,18 +276,44 @@ export class ApplyEngine {
    * full log replay (docs §9.2).
    */
   loadSnapshot(snapshot: Snapshot, ops: CrdtOperation[]): void {
+    // Validate schema version before restoring (fail closed).
+    if (snapshot.schemaVersion !== 1) {
+      throw new ApplyEngineError(
+        `Unsupported snapshot schema version: ${snapshot.schemaVersion}`,
+      );
+    }
+
+    // Validate checksum by reconstructing the snapshot's materialized state,
+    // using the same inputs as `snapshot()` (text, sorted map, vector).
+    const tempRga = new RgaSequence();
+    tempRga.loadNodes(snapshot.nodes);
+    const tempMap = new LwwMap();
+    tempMap.loadRegisters(snapshot.registers);
+    const expectedChecksum = ApplyEngine.hashPayload({
+      text: tempRga.render(),
+      map: [...tempMap.getMap()].sort(([a], [b]) =>
+        a < b ? -1 : a > b ? 1 : 0,
+      ),
+      vector: snapshot.versionVector,
+    });
+    if (expectedChecksum !== snapshot.checksum) {
+      throw new ApplyEngineError("Snapshot checksum mismatch");
+    }
+
     // Reset state.
     this.versionVector = cloneVectorClock(snapshot.versionVector);
     this.knownOps.clear();
     this.actorMaxCounter.clear();
     this.pending.clear();
 
-    // Rebuild RGA nodes from snapshot.
-    // RgaSequence doesn't expose bulk load; reconstruct via a fresh instance
-    // is not possible since rga is private. Instead, we set version vector
-    // and apply ops; snapshot nodes are treated as already-known.
-    // To keep it simple and correct: register snapshot nodes as known so
-    // duplicates are deduped, and set actor max counters from snapshot.
+    // Restore RGA nodes into the actual sequence (previously they were only
+    // registered as known; now the sequence itself reflects the snapshot).
+    this.rga.loadNodes(snapshot.nodes);
+
+    // Restore LWW registers into the actual map.
+    this.map.loadRegisters(snapshot.registers);
+
+    // Register snapshot nodes as known for dedup, and advance actor counters.
     for (const node of snapshot.nodes) {
       const idKey = encodeElementId(node.id);
       this.knownOps.set(idKey, {
@@ -303,7 +346,6 @@ export class ApplyEngine {
 
     // Apply tail operations.
     for (const op of ops) {
-      // Ignore buffered/rejected results here; tail ops should be ready.
       this.apply(op);
     }
 

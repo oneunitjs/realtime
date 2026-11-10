@@ -34,6 +34,17 @@ export {
   type Collaboration,
   type CollaborationOptions,
 } from "./server/collaboration.js";
+export type { CollaborationStorage } from "./server/storage.js";
+export type { DocumentSubscriptions } from "./server/subscriptions.js";
+export { MemoryDocumentSubscriptions } from "./server/subscriptions.js";
+export type { CollaborationBroadcaster } from "./server/broadcaster.js";
+export { MemoryBroadcaster } from "./server/broadcaster.js";
+export type {
+  DocumentScope,
+  operationKey,
+} from "./server/document-key.js";
+export { documentScopeKey } from "./server/document-key.js";
+export type { AuthenticatedPrincipal } from "./server/principal.js";
 export {
   Document,
   type DocumentState,

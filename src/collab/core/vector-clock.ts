@@ -41,6 +41,9 @@ export function validateActorId(actorId: unknown): asserts actorId is ActorId {
   if (actorId.length > 256) {
     throw new VectorClockError("Actor id exceeds 256 characters");
   }
+  if (actorId.includes("\0")) {
+    throw new VectorClockError("Actor id must not contain NUL characters");
+  }
 }
 
 /**
@@ -63,7 +66,7 @@ export function validateVectorClock(
   for (const key of keys) {
     validateActorId(key);
     const value = (vector as Record<string, unknown>)[key];
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
       throw new VectorClockError(
         `Vector clock counter for ${key} must be a non-negative integer`,
       );

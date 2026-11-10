@@ -480,18 +480,18 @@ export class Hub {
             throw new ForbiddenError("event:publish");
           }
 
-          if (event.roomId) {
-            // Enforce room membership: a client may only publish to rooms it joined.
-            const namespaceId = DEFAULT_NAMESPACE;
-            const roomKey = encodeRoomKey(principal.tenantId, namespaceId, event.roomId);
-            const roomMembers = this.membership.membersByRoomKey(roomKey);
-            if (!roomMembers.includes(connectionId)) {
-              this.metrics.increment("hub.publish.rejected");
-              throw new ForbiddenError(
-                `Not a member of room ${event.roomId}`,
-              );
-            }
-            const result = await this.router.publishToRoom(
+        if (event.roomId) {
+          // Enforce room membership: a client may only publish to rooms it joined.
+          const namespaceId = DEFAULT_NAMESPACE;
+          const roomKey = encodeRoomKey(principal.tenantId, namespaceId, event.roomId);
+          const roomMembers = this.membership.membersByRoomKey(roomKey);
+          if (!roomMembers.includes(connectionId)) {
+            this.metrics.increment("hub.publish.rejected");
+            throw new ForbiddenError(
+              `Not a member of room ${event.roomId}`,
+            );
+          }
+          const result = await this.router.publishToRoom(
               roomKey,
               data,
               connectionId,
@@ -533,13 +533,18 @@ export class Hub {
                 recipient.transport &&
                 recipient.principal?.tenantId === principal.tenantId
               ) {
-                const ok = await this.fanout.enqueue(
-                  {
-                    connectionId: recipient.transport.id,
-                    send: (d: Uint8Array) => recipient.transport.send(d).then(() => {}),
-                  },
-                  data
-                );
+      const ok = await this.fanout.enqueue(
+        {
+          connectionId: recipient.transport.id,
+          send: async (d: Uint8Array) => {
+            const result = await recipient.transport.send(d);
+            if (result.status !== "accepted") {
+              throw new Error(`Send not accepted: status=${result.status}`);
+            }
+          },
+        },
+        data
+      );
                 if (ok) {
                   delivered += 1;
                 } else {
@@ -630,7 +635,12 @@ export class Hub {
       const ok = await this.fanout.enqueue(
         {
           connectionId: recipient.transport.id,
-          send: (d: Uint8Array) => recipient.transport.send(d).then(() => {}),
+          send: async (d: Uint8Array) => {
+            const result = await recipient.transport.send(d);
+            if (result.status !== "accepted") {
+              throw new Error(`Send not accepted: status=${result.status}`);
+            }
+          },
         },
         encoded
       );

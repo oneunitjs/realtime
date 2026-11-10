@@ -99,7 +99,7 @@ async function dispatch(stack: Middleware[], ctx: HubContext): Promise<void> {
 }
 ```
 
-**Production requirements beyond the sample**
+**Engine requirements beyond the sample**
 
 - Explicit **terminal handler** (final stage that performs the actual action if nothing short-circuited)
 - **Deadline / cancellation** support via `AbortSignal` on the context
@@ -241,7 +241,7 @@ These values are set by trusted stages early in the pipeline and treated as read
 | Identity immutability | Principal / tenant / authz / IDs cannot be overwritten by later stages |
 | Rate limiting | Correct algorithm behavior; distributed store behavior under concurrency |
 | Cleanup | Resources released on error and on short-circuit |
-| Frozen registration | Stack does not change mid-flight in production mode |
+| Frozen registration | Stack does not change mid-flight at runtime |
 
 ---
 
@@ -253,7 +253,7 @@ These values are set by trusted stages early in the pipeline and treated as read
 4. Align rate-limit and validation errors with [Error Handling](./ERROR_HANDLING_ARCHITECTURE.md) codes (`RATE_LIMITED`, `VALIDATION_FAILED`, `FORBIDDEN`, etc.).
 5. Log middleware stage timing at debug/trace level; avoid logging full payloads by default.
 6. For multi-instance rate limits, document the shared store and failure mode (fail open vs fail closed) explicitly.
-7. Freeze stacks after boot in production; if hot-reload of middleware is required, use versioned atomic swap and test it.
+7. Freeze stacks after boot; if hot-reload of middleware is required, use versioned atomic swap and test it.
 
 ---
 

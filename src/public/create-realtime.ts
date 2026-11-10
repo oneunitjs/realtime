@@ -72,7 +72,16 @@ export interface RealtimeLimitsConfig {
 }
 
 export interface RealtimeAuthConfig {
-  readonly authenticate: (context: HandshakeContext) => Promise<AuthenticatedPrincipal>;
+  /**
+   * Verify a connection credential and return a trusted principal. Required
+   * unless `allowAnonymous` is opted into.
+   */
+  readonly authenticate?: (context: HandshakeContext) => Promise<AuthenticatedPrincipal>;
+  /**
+   * Opt into unauthenticated (anonymous) access. Connections without a valid
+   * credential are assigned an anonymous principal.
+   */
+  readonly allowAnonymous?: boolean;
 }
 
 export interface RealtimeTransportConfig {
@@ -255,6 +264,9 @@ class RealtimeServerImpl implements RealtimeServer {
 
   private async doStart(): Promise<RealtimeAddress> {
     this.adapter = await createRealtimeTransport(this.adapterOpts);
+    if (this._state !== "starting") {
+      throw new Error("REALTIME_CLOSING: startup aborted during shutdown");
+    }
 
     if (this.mode === "native") {
       if (!this.nativeApp) {
@@ -283,6 +295,9 @@ class RealtimeServerImpl implements RealtimeServer {
           throw err;
         }
       }
+      if (this._state !== "starting") {
+        throw new Error("REALTIME_CLOSING: startup aborted during shutdown");
+      }
       const address = this.buildAddress(this.port ?? 0);
       this.markReady(address);
       return address;
@@ -297,6 +312,9 @@ class RealtimeServerImpl implements RealtimeServer {
 
     try {
       await this.adapter!.listen(this.port, this.host);
+      if (this._state !== "starting") {
+        throw new Error("REALTIME_CLOSING: startup aborted during shutdown");
+      }
       const address = this.buildAddress(this.port);
       this.markReady(address);
       return address;
@@ -309,7 +327,9 @@ class RealtimeServerImpl implements RealtimeServer {
   }
 
   async close(options?: { timeoutMs?: number }): Promise<RealtimeShutdownResult> {
-    // Serialize through lifecycle lock to prevent start/close races.
+    // Serialize through the lifecycle lock. Any in-flight start() completes
+    // (via the same chain) before close proceeds, so shutdown never races
+    // with an incomplete start.
     this.lifecycleLock = this.lifecycleLock.then(async () => {
       if (this.closePromise) {
         return this.closePromise;
@@ -329,37 +349,56 @@ class RealtimeServerImpl implements RealtimeServer {
   private async doClose(timeoutMs: number): Promise<RealtimeShutdownResult> {
     const started = Date.now();
     const connectionCount = this.adapter?.connectionCount ?? 0;
-    let hubCloseError: unknown;
-    let timeoutWon = false;
+    let timedOut = false;
 
-    try {
-      await this.hub.close();
-    } catch (error) {
-      hubCloseError = error;
-      this.logger.error?.({ err: error }, "Hub shutdown failed");
-    } finally {
-      let resolved = false;
-      const timeoutTimer = setTimeout(() => {
-        timeoutWon = true;
-        resolved = true;
-      }, timeoutMs);
+    const remaining = () => Math.max(0, timeoutMs - (Date.now() - started));
 
+    const withDeadline = async <T>(p: Promise<T>, label: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`${label} deadline exceeded`));
+        }, remaining());
+      });
       try {
-        await this.adapter?.close() ?? Promise.resolve();
-      } catch (error) {
-        this.logger.error?.({ err: error }, "close error");
+        return await Promise.race([p, deadline]);
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
       }
+    };
 
-      if (!resolved) {
-        clearTimeout(timeoutTimer);
-      }
-      this.adapter = null;
+    // 1. Close the hub (all connections) within the deadline.
+    try {
+      await withDeadline(this.hub.close(), "hub close");
+    } catch (error) {
+      this.logger.error?.({ err: error }, "Hub shutdown failed");
+      timedOut = true;
     }
 
+    // 2. Close the transport adapter within the remaining deadline. If the
+    //    deadline expires we stop waiting (forced termination) and do NOT
+    //    claim the adapter has closed merely because waiting ended.
+    if (this.adapter && !timedOut) {
+      const adapterClose = this.adapter.close();
+      try {
+        await withDeadline(adapterClose, "adapter close");
+      } catch (error) {
+        this.logger.error?.({ err: error }, "Adapter close exceeded deadline");
+        timedOut = true;
+        // Stop waiting; adapter.close() may still complete in the background.
+        void adapterClose.catch(() => {});
+      }
+    }
+
+    this.adapter = null;
     this._state = "closed";
+
     const result: RealtimeShutdownResult = {
       drainedConnections: connectionCount,
-      forcedClose: timeoutWon,
+      forcedClose: timedOut,
       durationMs: Date.now() - started,
     };
     this.emit("closed", result);
@@ -400,21 +439,30 @@ class RealtimeServerImpl implements RealtimeServer {
 
   private buildAuthProvider(config: RealtimeConfig): AuthProvider {
     const authenticate = config.authenticate ?? config.auth?.authenticate;
-    if (!authenticate) {
+    if (authenticate) {
+      return {
+        authenticate: async (credential, options) => {
+          const handshake = options.handshake ?? {
+            path: this.path,
+            headers: {},
+            query: credential ? { token: credential } : {},
+            signal: options.signal,
+          };
+          const principal = await authenticate(handshake);
+          return normalizePrincipal(principal, credential);
+        },
+      };
+    }
+    // No explicit authentication provider. Anonymous access is opt-in only:
+    // a server started without explicit authentication must not silently
+    // let clients choose their own identity via a query token.
+    if (config.auth?.allowAnonymous === true) {
       return anonymousAuthProvider;
     }
-    return {
-      authenticate: async (credential, options) => {
-        const handshake = options.handshake ?? {
-          path: this.path,
-          headers: {},
-          query: credential ? { token: credential } : {},
-          signal: options.signal,
-        };
-        const principal = await authenticate(handshake);
-        return normalizePrincipal(principal, credential);
-      },
-    };
+    throw new Error(
+      "REALTIME_AUTH_REQUIRED: an authentication provider must be supplied. " +
+        "Pass `authenticate` or set `auth: { allowAnonymous: true }` to opt into unauthenticated access.",
+    );
   }
 
   private buildAddress(port: number): RealtimeAddress {

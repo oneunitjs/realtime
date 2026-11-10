@@ -5,8 +5,8 @@
 **Focus:** Web-based real-time collaboration (browser + mobile clients)  
 **Last updated:** 2026-11-06  
 **Related:**  
-- [Core Hub Architecture](./CORE_HUB_ARCHITECTURE.md)  
-- [Collaboration Engine Architecture](./COLLABORATION_ENGINE_ARCHITECTURE.md)
+- [Core Hub Architecture](../core/core-hub.md)  
+- [Collaboration Engine Architecture](../collab/collaboration-engine.md)
 
 ---
 

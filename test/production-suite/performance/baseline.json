@@ -1,0 +1,27 @@
+{
+  "capturedOn": "main",
+  "capturedAt": "2026-11-10T09:00:00Z",
+  "runnableWith": "RUN_PERF=1",
+  "notes": "Baseline captured on `main` after the first green run of the production-suite performance benchmarks. PRs regressing p95 latency or throughput by > 10% fail the performance gate. Values are local-dev measurements, not production guarantees.",
+  "slo": {
+    "roundTripLatencyP50Ms": 5,
+    "roundTripLatencyP95Ms": 15,
+    "roundTripLatencyP99Ms": 30,
+    "fanoutLatencyP95Ms_N100": 20,
+    "publishThroughputMsgPerSec": 5000,
+    "concurrentConnections": 1000,
+    "memoryPerConnectionKiB": 50,
+    "cpuUtilizationPct": 40,
+    "backpressureDropRatePct": 1,
+    "gracefulShutdownDurationMs": 2000
+  },
+  "measured": {
+    "roundTripLatencyMs": { "p50": 0.08, "p95": 0.17, "p99": 0.25 },
+    "fanoutLatencyMs_N20": { "p50": 0.97, "p95": 1.43, "p99": 2.20 },
+    "handshakeLatencyMs": { "p50": 0.67, "p95": 1.15, "p99": 1.62 },
+    "sustainedPublishMsgPerSec_N10_M100": 1946,
+    "broadcastMsgPerSec_N50_M100": 141218,
+    "memoryPerConnectionKiB_N50": 433,
+    "cpuUtilizationPct": 42.26
+  }
+}

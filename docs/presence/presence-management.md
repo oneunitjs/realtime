@@ -6,12 +6,12 @@
 **Last updated:** 2026-11-07  
 
 **Related documents:**  
-- [Core Hub Architecture](./CORE_HUB_ARCHITECTURE.md)  
-- [Event Management and Delivery](./EVENT_MANAGEMENT_ARCHITECTURE.md)  
-- [Error Handling Architecture](./ERROR_HANDLING_ARCHITECTURE.md)  
-- [Collaboration Engine Architecture](./COLLABORATION_ENGINE_ARCHITECTURE.md)  
-- [Middleware Architecture](./MIDDLEWARE_ARCHITECTURE.md)  
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md)
+- [Core Hub Architecture](../core/core-hub.md)  
+- [Event Management and Delivery](../event/event-management.md)  
+- [Error Handling Architecture](../error/error-handling.md)  
+- [Collaboration Engine Architecture](../collab/collaboration-engine.md)  
+- [Middleware Architecture](../middleware/middleware.md)  
+- [Consolidation Plan](../CONSOLIDATION_PLAN.md)
 
 ---
 
@@ -175,7 +175,7 @@ Typing indicators, cursors, and selections are **not** durable presence fields a
 - User switches document
 - TTL expires
 
-They travel on the **ephemeral event path** (see [Event Management](./EVENT_MANAGEMENT_ARCHITECTURE.md)), typically with `delivery: 'ephemeral'`. They must not be written to the Collaboration Engine operation log.
+They travel on the **ephemeral event path** (see [Event Management](../event/event-management.md)), typically with `delivery: 'ephemeral'`. They must not be written to the Collaboration Engine operation log.
 
 Under load, prefer **coalescing** (keep latest cursor position) over queuing every intermediate update.
 
@@ -236,7 +236,7 @@ Typing / cursor   → ephemeral events, separate TTL, not stored as durable pres
 - **Event subsystem** fans out presence and awareness updates to authorized subscribers (often room-scoped).  
 - **Collaboration Engine** does not store presence or cursors in the CRDT log.
 
-Errors (unauthorized read, invalid status, rate limit on typing) map through the shared [Error Handling](./ERROR_HANDLING_ARCHITECTURE.md) registry.
+Errors (unauthorized read, invalid status, rate limit on typing) map through the shared [Error Handling](../error/error-handling.md) registry.
 
 ---
 

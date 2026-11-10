@@ -394,6 +394,7 @@ describe("E2EE envelope schema validation", () => {
     keyEpoch: 1,
     nonce: new Uint8Array(24),
     ciphertext: new Uint8Array([1, 2, 3]),
+    signature: new Uint8Array(64),
   };
 
   it("accepts a well-formed envelope", () => {
@@ -493,7 +494,7 @@ describe("E2EE Core Hub integration — routes ciphertext without decrypting", (
       authorize: () => false,
     });
     await aliceConnection(hub);
-    const envelope = { protocolVersion: 1, conversationId: "r", senderUserId: "alice", senderDeviceId: "d", messageId: "m", keyEpoch: 1, nonce: new Uint8Array(24), ciphertext: new Uint8Array([1]) };
+    const envelope = { protocolVersion: 1, conversationId: "r", senderUserId: "alice", senderDeviceId: "d", messageId: "m", keyEpoch: 1, nonce: new Uint8Array(24), ciphertext: new Uint8Array([1]), signature: new Uint8Array(64) };
     await expect(hub.sendEnvelope("c-alice", envelope as any)).rejects.toThrow(
       ForbiddenError,
     );
@@ -504,7 +505,7 @@ describe("E2EE Core Hub integration — routes ciphertext without decrypting", (
       authProvider: makeAuthProvider({ userId: "alice", tenantId: "tenant-a" }),
     });
     await aliceConnection(hub);
-    const envelope = { protocolVersion: 1, conversationId: "r", senderUserId: "alice", senderDeviceId: "d", messageId: "m", keyEpoch: 1, nonce: new Uint8Array(24), ciphertext: new Uint8Array([1]) };
+    const envelope = { protocolVersion: 1, conversationId: "r", senderUserId: "alice", senderDeviceId: "d", messageId: "m", keyEpoch: 1, nonce: new Uint8Array(24), ciphertext: new Uint8Array([1]), signature: new Uint8Array(64) };
     await expect(hub.sendEnvelope("c-alice", envelope as any)).rejects.toThrow();
   });
 });

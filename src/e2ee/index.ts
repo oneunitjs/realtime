@@ -5,8 +5,8 @@
  * docs/e2ee/e2ee-architecture-plan.md:
  *
  * - `EncryptedEnvelope` contract and canonical serialization
- * - `EnvelopeService` seal/open (X25519 + HKDF-SHA-256 + XChaCha20-Poly1305 +
- *   Ed25519), fail-closed
+* - `EnvelopeService` seal/open (X25519 + HKDF-SHA-256 + XSalsa20-Poly1305 +
+*   Ed25519), fail-closed
  * - `DeviceIdentityManager` / `KeyDirectory` contracts + in-memory references
  * - `ReplayGuard` for replay protection
  * - Core Hub envelope routing that never decrypts

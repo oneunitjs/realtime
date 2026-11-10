@@ -6,7 +6,7 @@
  *   Sender: establish shared key (X25519), derive an AEAD key with
  *   HKDF-SHA-256 (context = protocol version, conversation ID, sender and
  *   recipient device IDs, key epoch), generate a fresh nonce, encrypt with
- *   XChaCha20-Poly1305 (routing metadata as AAD), optionally sign the
+ *   XSalsa20-Poly1305 (routing metadata as AAD), optionally sign the
  *   canonical envelope fields with Ed25519, then hand the envelope to the
  *   Hub which routes it without decrypting.
  *
@@ -51,8 +51,8 @@ import {
   ReplayError,
 } from "./types.js";
 
-const XCHACHA_KEY_BYTES = 32;
-const XCHACHA_NONCE_BYTES = 24;
+const XSALSA_KEY_BYTES = 32;
+const XSALSA_NONCE_BYTES = 24;
 
 function byteLengthOf(value: unknown): number {
   if (value instanceof Uint8Array) {
@@ -109,7 +109,7 @@ const BOX_NONCE_BYTES = 24;
  * Encrypt with a derived AEAD key using libsodium's vetted
  * crypto_box_easy_afternm (X25519 + XSalsa20-Poly1305). Returns
  * `{ nonce, ciphertext }` where the wire format is `nonce || ciphertext`.
- * docs §3 allows "XChaCha20-Poly1305 or another vetted AEAD"; this codebase
+ * docs §3 allows "XSalsa20-Poly1305 or another vetted AEAD"; this codebase
  * uses the libsodium secretbox construction that is proven in this build.
  */
 function sealSharedKey(plaintext: Buffer, aeadKey: Buffer): {
@@ -171,11 +171,9 @@ export interface EnvelopeServiceOptions {
   allowedEpochs?: Set<number>;
   revokedDevices?: Set<string>;
   replayGuard?: {
-    /** Non-mutating preliminary check: returns true if the message ID is
-     *  not yet seen (or should be allowed through). Does not commit state. */
-    check: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
-    /** Atomic commit after successful authentication. Must not throw. */
-    commit: (senderDeviceId: string, messageId: string) => void | Promise<void>;
+    /** Atomic consume: returns true if the message ID was newly claimed,
+     *  false if it was already seen (duplicate). Must not throw. */
+    consume: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
   };
 }
 
@@ -191,8 +189,7 @@ export class EnvelopeService {
   private readonly revokedDevices: Set<string>;
   private readonly replayGuard:
     | {
-        check: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
-        commit: (senderDeviceId: string, messageId: string) => void | Promise<void>;
+        consume: (senderDeviceId: string, messageId: string) => boolean | Promise<boolean>;
       }
     | null;
 
@@ -233,7 +230,7 @@ export class EnvelopeService {
       keyEpoch: input.keyEpoch,
     });
     const aeadKey = Buffer.from(
-      await hkdfSha256(sharedKey, new Uint8Array(0), info, XCHACHA_KEY_BYTES),
+      await hkdfSha256(sharedKey, new Uint8Array(0), info, XSALSA_KEY_BYTES),
     );
 
     const { nonce, ciphertext } = sealSharedKey(
@@ -304,18 +301,6 @@ export class EnvelopeService {
       throw new UnknownEpochError();
     }
 
-    // Replay check (non-mutating preliminary): reject duplicates/stale
-    // before doing expensive crypto, but do not commit state yet.
-    if (this.replayGuard) {
-      const ok = await this.replayGuard.check(
-        envelope.senderDeviceId,
-        envelope.messageId,
-      );
-      if (!ok) {
-        throw new ReplayError();
-      }
-    }
-
     // Verify Ed25519 signature over canonical envelope fields.
     // `verify()` expects `signature(64) || message`, so reconstruct it.
     const messageBytes = Buffer.from(
@@ -365,7 +350,7 @@ export class EnvelopeService {
       keyEpoch: envelope.keyEpoch,
     });
     const aeadKey = Buffer.from(
-      await hkdfSha256(sharedKey, new Uint8Array(0), info, XCHACHA_KEY_BYTES),
+      await hkdfSha256(sharedKey, new Uint8Array(0), info, XSALSA_KEY_BYTES),
     );
 
     let plaintext: Buffer;
@@ -382,12 +367,16 @@ export class EnvelopeService {
       throw new AeadFailureError((error as Error)?.message);
     }
 
-    // Commit replay state only after successful authentication and decryption.
+    // Atomic replay consume after successful authentication and decryption.
+    // Returns false if the message ID was already claimed (duplicate).
     if (this.replayGuard) {
-      await this.replayGuard.commit(
+      const claimed = await this.replayGuard.consume(
         envelope.senderDeviceId,
         envelope.messageId,
       );
+      if (!claimed) {
+        throw new ReplayError();
+      }
     }
 
     return plaintext;
@@ -450,9 +439,9 @@ export class EnvelopeService {
 
     const nonceBytes = byteLengthOf(e.nonce);
     const cipherBytes = byteLengthOf(e.ciphertext);
-    if (nonceBytes !== XCHACHA_NONCE_BYTES) {
+    if (nonceBytes !== XSALSA_NONCE_BYTES) {
       throw new InvalidEnvelopeError(
-        `nonce must be ${XCHACHA_NONCE_BYTES} bytes, got ${nonceBytes}`,
+        `nonce must be ${XSALSA_NONCE_BYTES} bytes, got ${nonceBytes}`,
       );
     }
     if (cipherBytes === 0) {
@@ -464,15 +453,21 @@ export class EnvelopeService {
       throw new EnvelopeTooLargeError(encoded.byteLength, maxBytes);
     }
 
-    // Signature presence is required for sender authentication.
+    // Signature is required for sender authentication.
+    // Ed25519 signatures are exactly 64 bytes.
     if (
-      e.signature !== undefined &&
       !(
         e.signature instanceof Uint8Array ||
         ArrayBuffer.isView(e.signature)
       )
     ) {
       throw new InvalidEnvelopeError("signature must be a Uint8Array");
+    }
+    const signatureBytes = byteLengthOf(e.signature);
+    if (signatureBytes !== 64) {
+      throw new InvalidEnvelopeError(
+        `signature must be 64 bytes, got ${signatureBytes}`,
+      );
     }
   }
 

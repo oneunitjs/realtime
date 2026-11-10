@@ -9,8 +9,8 @@
  * - Envelope schema, size, and authorization are validated by the Hub;
  *   plaintext/CKDT content is never inspected server-side.
  *
- * All cryptography uses libsodium primitives (X25519, HKDF-SHA-256,
- * XChaCha20-Poly1305, Ed25519) via the existing `src/security/e2ee` layer.
+* All cryptography uses libsodium primitives (X25519, HKDF-SHA-256,
+* XSalsa20-Poly1305, Ed25519) via the existing `src/security/e2ee` layer.
  */
 
 // ---------------------------------------------------------------------------

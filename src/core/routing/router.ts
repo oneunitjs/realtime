@@ -52,30 +52,41 @@ export class Router {
     senderId: string,
     excludeSender: boolean
   ): Promise<{ delivered: number; failed: number }> {
+    const start = Date.now();
     let delivered = 0;
     let failed = 0;
 
-    for (const recipient of recipients) {
-      if (excludeSender && recipient.id === senderId) {
-        continue;
-      }
+    // Fire all enqueues concurrently. The FanoutScheduler bounds in-flight
+    // sends globally (default 64) and enforces per-connection queued-byte
+    // limits, so fanning out concurrently does not overwhelm the event loop.
+    const results = await Promise.all(
+      recipients.map(async (recipient) => {
+        if (excludeSender && recipient.id === senderId) {
+          return "skipped";
+        }
+        const ok = await this.fanout.enqueue(
+          {
+            connectionId: recipient.id,
+            send: (d: Uint8Array) => recipient.send(d).then(() => {}),
+          },
+          data
+        );
+        return ok ? "delivered" : "failed";
+      }),
+    );
 
-      const ok = await this.fanout.enqueue(
-        {
-          connectionId: recipient.id,
-          send: (d: Uint8Array) => recipient.send(d).then(() => {}),
-        },
-        data
-      );
-      if (ok) {
+    for (const result of results) {
+      if (result === "delivered") {
         delivered += 1;
-      } else {
+      } else if (result === "failed") {
         failed += 1;
       }
+      // "skipped" is neither delivered nor failed
     }
 
+    const elapsed = Date.now() - start;
     this.metrics.increment("publish.fanout", delivered);
-    this.metrics.timing("publish.fanout.ms", 0);
+    this.metrics.timing("publish.fanout.ms", elapsed);
     return { delivered, failed };
   }
 }

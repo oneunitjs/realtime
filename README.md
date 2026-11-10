@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@oneunit/realtime"><img src="https://img.shields.io/npm/v/@oneunit/realtime?color=0969da&label=npm" alt="npm version"></a>
-  <a href="https://github.com/mayank040902/oneunit/blob/master/packages/realtime/LICENSE"><img src="https://img.shields.io/npm/l/@oneunit/realtime?color=22863a" alt="license"></a>
+  <a href="https://github.com/oneunitjs/realtime/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@oneunit/realtime?color=22863a" alt="license"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-417e38" alt="node version">
   <img src="https://img.shields.io/badge/types-included-3178c6" alt="types included">
   <img src="https://img.shields.io/badge/engine-uWebSockets.js%20v20-8a2be2" alt="engine">

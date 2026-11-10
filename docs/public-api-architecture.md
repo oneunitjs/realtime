@@ -115,7 +115,7 @@ One `setInterval` sweeps every connection, pings those that support `ping()`, an
 - **Authentication:** `authenticate(context)` runs the user hook once before `join()`. Metadata returned becomes `client.metadata`. Throws `AuthenticationError` on rejection.
 - **Authorization:** `authorize(context)` runs for `connect`, `join`, `send`, `broadcast`. `authorizeRecipients: true` in broadcast options authorizes every recipient individually. Throws `AuthorizationError` on denial.
 - **Delivery:** `send(target, message)` unicasts; `broadcast(channel, message)` fans out. Both encode via `encodePayload()` (notepack for objects, UTF-8 for strings) and validate size. Delivery is `Promise<boolean>` / `Promise<number>` — slow or broken connections are counted and skipped, never thrown.
-- **E2EE:** `sendEncrypted()` / `broadcastEncrypted()` produce per-recipient ciphertext using `encryptWithSharedKey` (X25519 + XChaCha20-Poly1305). Members without a registered key are skipped, not failed. If E2EE is not enabled, `broadcastEncrypted` throws `ConnectionError("E2EE is not enabled on this hub")` rather than silently reporting 0 deliveries (which would look like an empty channel).
+- **E2EE:** `sendEncrypted()` / `broadcastEncrypted()` produce per-recipient ciphertext using `encryptWithSharedKey` (X25519 + XSalsa20-Poly1305). Members without a registered key are skipped, not failed. If E2EE is not enabled, `broadcastEncrypted` throws `ConnectionError("E2EE is not enabled on this hub")` rather than silently reporting 0 deliveries (which would look like an empty channel).
 - **Heartbeat:** `startHeartbeat()` runs one `setInterval` that pings every connection with a `ping()` method. Stale connections (missed deadline) are disconnected with code `1001`. `touch(clientId)` resets the deadline for transports without protocol pings.
 - **Stats:** `stats()` returns point-in-time counters (messages sent/dropped, broadcasts, connections accepted/rejected, authorizations denied, heartbeats, terminations).
 
@@ -183,7 +183,7 @@ One `setInterval` sweeps every connection, pings those that support `ping()`, an
 
 ### 4.5 E2EE (`src/e2ee/`, `src/security/e2ee.ts`)
 
-**What it is:** End-to-end encryption using libsodium (X25519 + HKDF-SHA-256 + XChaCha20-Poly1305 + Ed25519).
+**What it is:** End-to-end encryption using libsodium (X25519 + HKDF-SHA-256 + XSalsa20-Poly1305 + Ed25519).
 
 **Key exports:**
 - `EnvelopeService` — `seal`/`open` (fail-closed), `validateEnvelope`, `encodeEnvelope`.

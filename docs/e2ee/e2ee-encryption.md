@@ -95,7 +95,7 @@ Document these limits in the security model and in user-facing help text.
 |-----------|---------|-------|
 | **X25519** | Diffie–Hellman key agreement | 32-byte public / private keys |
 | **HKDF-SHA-256** | Derive purpose-specific keys from shared secrets + context | Always include protocol version and conversation IDs in context |
-| **XChaCha20-Poly1305** (or other vetted AEAD) | Encrypt / decrypt payloads | Unique nonce per key; never reuse |
+| **XSalsa20-Poly1305** | Encrypt / decrypt payloads | Unique nonce per key; never reuse |
 | **Ed25519** | Sign identity records and key-change statements | libsodium secret keys are commonly 64 bytes — do not confuse with X25519 |
 | **CSPRNG** | Keys, salts, nonces | Use the library’s secure random API |
 

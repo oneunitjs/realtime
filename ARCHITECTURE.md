@@ -313,6 +313,16 @@ export function expressRealtime(app, realtime, options) {
 }
 ```
 
+### 4.6 Lifecycle Synchronization & Startup/Shutdown Races
+
+`RealtimeServer` uses a serialized `lifecycleLock` promise chain to prevent race conditions between `start()` and `close()`:
+
+- **Start During Drain**: Calling `start()` while the server is `draining` throws `REALTIME_CLOSING`.
+- **Double Start**: Subsequent `start()` calls return the in-flight promise instead of creating a duplicate transport.
+- **Double Close**: Subsequent `close()` calls return the in-flight shutdown promise.
+- **Transport Guard**: If `start()` is cancelled while the transport adapter is being created, the adapter is always closed before the error propagates.
+- **Unconditional Transport Closure**: `doClose()` wraps `hub.close()` in `try/finally`, so `adapter.close()` always executes even if hub shutdown throws.
+
 ---
 
 ## 5. Protocol, Wire Framing & Serialization
@@ -405,6 +415,10 @@ flowchart TD
     S6 --> S7[Step 7: Mark CLOSED, Scrub Indexes & Decrement Counters]
     S7 --> DONE[Teardown Finalized]
 ```
+
+### 6.4 Connection Metrics Accuracy
+
+The `hub.connections` gauge tracks **authenticated** connections only. A connection that fails authentication is never counted as "connected," so the disconnect cleanup path decrements `hub.connections` only when a connection previously reached the `authenticated` state and carried a `Principal`. Connections that fail before authentication produce no increment and therefore no corresponding decrement, keeping the gauge accurate and never negative.
 
 ---
 
@@ -503,7 +517,11 @@ flowchart TD
 | **Accepted** | Inbound frame passed schema validation and authorization checks. |
 | **Enqueued** | Outbound frame admitted into the recipient's FIFO queue. |
 | **Written** | Frame accepted by uWS C++ buffer for TCP transmission. |
+| **Backpressured** | uWS could not accept the frame (kernel buffer full); the send was dropped. |
+| **Dropped** | Frame exceeded the per-connection queue cap; discarded without attempting socket write. |
 | **Acknowledged** | Application-level delivery confirmation returned by client (optional). |
+
+**Important**: A `backpressured` or `dropped` result means the message was **not** delivered to the peer. `PublishResult` reports partial delivery when any recipient experiences a backpressured or dropped send.
 
 ---
 
@@ -528,10 +546,11 @@ flowchart TD
 
 ### Defensive Strategies
 
-1. **Memory Ceiling**: If a connection's pending queue exceeds `maxQueuedBytesPerConnection` (default 256 KiB), new frames are dropped immediately (`status: "backpressured"`).
-2. **uWS C++ Backpressure Monitoring**: `socket.bufferedBytes()` reflects native kernel and uWS buffer sizes. If `maxBackpressure` is hit, uWS stops reading from the client and triggers `onDrain` when the buffer subsides.
-3. **No-Throw Guarantee**: `Hub.publish()` and `Hub.broadcast()` **never throw due to backpressure**. They return a typed `PublishResult` reporting partial delivery.
-4. **Slow Consumer Termination**: Unresponsive clients that exceed consecutive backpressure drop thresholds are terminated to prevent resource exhaustion.
+1. **Memory Ceiling**: If a connection's pending queue exceeds `maxQueuedBytesPerConnection` (default 256 KiB), new frames are dropped immediately and counted as failed delivery.
+2. **uWS C++ Backpressure Monitoring**: `socket.bufferedBytes()` reflects native kernel and uWS buffer sizes. If `maxBackpressure` is hit, uWS stops reading from the client and triggers `onDrain` when the buffer subsides. A backpressured result means the frame was **not** written to the socket.
+3. **Delivery-Aware Fan-Out**: The router inspects each transport `SendResult`. Only frames with `status: "accepted"` count as delivered. Backpressured and dropped frames increment the failure counter and produce `PublishResult: "partial"`.
+4. **No-Throw Guarantee**: `Hub.publish()` and `Hub.broadcast()` **never throw due to backpressure**. They return a typed `PublishResult` reporting partial delivery.
+5. **Slow Consumer Termination**: Unresponsive clients that exceed consecutive backpressure drop thresholds are terminated to prevent resource exhaustion.
 
 ---
 
@@ -680,7 +699,7 @@ sequenceDiagram
     Note over Alice,Bob: Cryptographic Key Agreement (Libsodium)
     Alice->>Alice: 1. Generate Ephemeral X25519 ECDH
     Alice->>Alice: 2. Derive Symmetric Key (HKDF-SHA-256)
-    Alice->>Alice: 3. Encrypt Plaintext (XChaCha20-Poly1305 AEAD)
+    Alice->>Alice: 3. Encrypt Plaintext (XSalsa20-Poly1305 AEAD)
     Alice->>Alice: 4. Sign Header & Ciphertext (Ed25519)
     Alice->>Hub: sendEnvelope(EncryptedEnvelope)
     Hub->>Hub: 5. Verify Sender Principal & Epoch Bounds
@@ -688,19 +707,23 @@ sequenceDiagram
     Hub-->>Bob: Forward Ciphertext (Blind Fan-out)
     Bob->>Bob: 7. Verify Ed25519 Signature
     Bob->>Bob: 8. Derive Shared Secret (Bob X25519 Private + Alice Public)
-    Bob->>Bob: 9. Decrypt Plaintext (XChaCha20-Poly1305)
+    Bob->>Bob: 9. Decrypt Plaintext (XSalsa20-Poly1305)
 ```
 
 ### 14.1 Cryptographic Primitives
 
 - **Asymmetric Key Exchange**: X25519 (Elliptic Curve Diffie-Hellman over Curve25519).
 - **Key Derivation Function**: HKDF-SHA-256.
-- **Authenticated Encryption**: XChaCha20-Poly1305 (256-bit key, 192-bit nonce, 128-bit MAC).
+- **Authenticated Encryption**: XSalsa20-Poly1305 (256-bit key, 24-byte nonce, 128-bit MAC).
 - **Digital Signatures**: Ed25519 (EdDSA over Curve25519).
 
 ### 14.2 Replay Protection with `ReplayGuard`
 
-Every envelope includes a monotonic sequence number, timestamp, and unique message ID. The `ReplayGuard` maintains a sliding replay window to detect and drop duplicated or replayed envelopes.
+Every envelope includes a monotonic sequence number, timestamp, and unique message ID. The `ReplayGuard` maintains a bounded replay cache to detect and drop duplicated or replayed envelopes.
+
+- **Atomic Claim**: `consume(senderDeviceId, messageId)` atomically checks and claims a message ID in one operation. Returns `true` if newly claimed, `false` if already seen (duplicate). A single shared guard instance cannot race with itself.
+- **Bounded Memory**: The guard is capped at a configurable maximum entry count (default 10,000). When capacity is reached, the oldest entry is evicted (LRU) before inserting a new one, preventing unbounded memory growth on long-running connections.
+- **Fail-Closed**: A `false` result causes `open()` to reject the envelope with `ReplayError`, preventing any duplicate or replayed message from being decrypted.
 
 ---
 

@@ -332,6 +332,11 @@ export class EnvelopeService {
       }),
     );
     const signatureBytes = Buffer.from(envelope.signature ?? new Uint8Array(0));
+    // Ed25519 signatures are exactly 64 bytes. Reject anything else early so
+    // libsodium never sees a malformed signature.
+    if (signatureBytes.length !== 64) {
+      throw new InvalidSignatureError();
+    }
     let signatureOk = false;
     try {
       verify(

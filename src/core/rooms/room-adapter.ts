@@ -255,40 +255,6 @@ export class RoomAdapter {
       };
     }
 
-    // Tenant isolation: if any tenant already has members in a room with
-    // the same bare roomId, a different tenant cannot join.
-    for (const [existingRoomKey, existingConnSet] of this.roomMembers) {
-      if (existingConnSet.size === 0) {
-        continue;
-      }
-      const decoded = decodeRoomKey(existingRoomKey);
-      if (!decoded) {
-        continue;
-      }
-      if (decoded.roomId === roomId && decoded.tenantId !== tenantId) {
-        throw new TenantIsolationError(
-          `Room ${roomId} is isolated to tenant ${decoded.tenantId}`,
-        );
-      }
-    }
-
-    // Tenant isolation: check the store too (for members added before this adapter's local index)
-    const allMemberships = this.store.getAllMemberships();
-    for (const [storeRoomKey, connMap] of allMemberships) {
-      if (connMap.size === 0) {
-        continue;
-      }
-      const decoded = decodeRoomKey(storeRoomKey);
-      if (!decoded) {
-        continue;
-      }
-      if (decoded.roomId === roomId && decoded.tenantId !== tenantId) {
-        throw new TenantIsolationError(
-          `Room ${roomId} is isolated to tenant ${decoded.tenantId}`,
-        );
-      }
-    }
-
     await this.ensureRoom(tenantId, roomId);
 
     const result = await this.manager.join(

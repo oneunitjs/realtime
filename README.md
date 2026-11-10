@@ -601,11 +601,12 @@ await realtime.hub.sendEnvelope(aliceConnectionId, sealedEnvelope);
 const opened = await envelopeService.open({
   envelope: sealedEnvelope,
   recipientX25519PrivateKey: bobKeys.x25519PrivateKey,
+  senderX25519PublicKey: aliceKeys.x25519PublicKey,
   senderEd25519PublicKey: aliceKeys.ed25519PublicKey,
-  senderUserId: "alice",
+  keyEpoch: 1,
 });
 
-console.log(new TextDecoder().decode(opened.plaintext));
+console.log(new TextDecoder().decode(opened));
 // "Classified top-secret message"
 ```
 

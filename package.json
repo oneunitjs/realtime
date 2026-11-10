@@ -86,13 +86,8 @@
   },
   "files": [
     "dist",
-    "src",
-    "examples",
-    "docs",
     "LICENSE",
-    "README.md",
-    "ARCHITECTURE.md",
-    "CHANGELOG.md"
+    "README.md"
   ],
   "scripts": {
     "clean": "node -e \"const fs=require('node:fs');for(const p of ['dist','tsconfig.tsbuildinfo'])fs.rmSync(p,{recursive:true,force:true})\"",

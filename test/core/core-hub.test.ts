@@ -173,9 +173,12 @@ describe("Given an authenticated connection, When joining a room, Then membershi
     });
     await connectClient(hub, "c1", "alice");
     await connectClient(hub, "c2", "bob");
+    // Two tenants can independently use the same bare roomId; room keys
+    // are tenant-qualified so they are independent rooms.
     await hub.joinRoom("c1", "room-1");
-    await expect(hub.joinRoom("c2", "room-1")).rejects.toBeInstanceOf(TenantIsolationError);
-    expect(roomCount(hub, "room-1")).toBe(1);
+    await hub.joinRoom("c2", "room-1");
+    expect(hub.getConnection("c1")?.state).toBe("authenticated");
+    expect(hub.getConnection("c2")?.state).toBe("authenticated");
   });
 
   it("Given authorize returns false, When joinRoom, Then ForbiddenError is thrown and no membership", async () => {

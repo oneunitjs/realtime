@@ -685,7 +685,7 @@ export class Hub {
       clearInterval(this.heartbeatTimer);
     }
     const connections = this.registry.all();
-    await Promise.all(
+    await Promise.allSettled(
       connections.map((connection) =>
         this.disconnect(connection.id, "server shutdown"),
       ),

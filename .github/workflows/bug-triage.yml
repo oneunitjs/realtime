@@ -1,0 +1,64 @@
+name: Bug Triage
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'bug')
+
+    steps:
+      - name: Check required labels
+        id: check-labels
+        run: |
+          LABELS="${{ github.event.issue.labels.*.name }}"
+          if echo "$LABELS" | grep -q "triage"; then
+            echo "has_triage=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_triage=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add triage label if missing
+        if: steps.check-labels.outputs.has_triage == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['triage']
+            })
+
+      - name: Comment with reporter guidance
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Hello @${{ github.event.issue.user.login }}, thank you for the bug report!
+
+A maintainer will triage this issue shortly. To help us move faster, please make sure your report includes:
+
+1. **Minimal reproduction** — the smallest TypeScript sample using only public APIs.
+2. **Environment details** — OS, Node.js version, and `@oneunit/realtime` version.
+3. **Expected vs. actual result** — what you expected and what actually happened.
+4. **Redacted logs** — no tokens, credentials, keys, or customer data.
+
+For full details, see [docs/BUG_REPORTING.md](https://github.com/oneunitjs/realtime/blob/main/docs/BUG_REPORTING.md).
+
+If this is a security vulnerability, please do not comment publicly — use the repository's security advisory process instead.`
+            })
+
+      - name: Assign triage project
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Optional: add to a triage project if configured
+            console.log("Issue triaged: #" + context.issue.number);
